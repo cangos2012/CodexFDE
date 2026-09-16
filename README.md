@@ -12,7 +12,7 @@
 python main.py
 ```
 
-启动后访问 [研发工作台](http://127.0.0.1:8001/) 和 [FlowERP](http://127.0.0.1:8000/)。重复执行会复用同一数据目录的服务；服务在后台运行。Windows 也可双击 `打开工作台.cmd`。数据位置由本机 `.runtime/services.json` 保存，日常启动无需手动指定目录或重新初始化。
+启动后访问 [研发工作台](http://127.0.0.1:8001/) 和 [FlowERP](http://127.0.0.1:8000/)。默认重启同一数据目录的工作台以加载新代码，FlowERP 可复用；需要保留已有工作台进程时使用 `python main.py --reuse`。服务在后台运行。Windows 也可双击 `打开工作台.cmd`。数据位置由本机 `.runtime/services.json` 保存，日常启动无需手动指定目录或重新初始化。
 
 - L01～L04：做出能接收 Spec、受控修改代码并运行最小 Eval 的工作台 V0。
 - L05～L15：用工作台持续交付 FlowERP；每次真实交付都反过来升级 Eval、Loop、Graph、API、Web 和反馈闭环。
@@ -28,6 +28,12 @@ FDE 指 **Forward-Deployed Engineering**：贴近用户、数据和运行后果�
 2. **FlowERP 客户项目**：负责提供真实业务约束，并检验工作台是否真的能持续交付。
 
 > 课程采用“案例先行、工具后置”。例如 L03 先用“库存导出”案例识别歧义、补齐验收口径，再介绍 Spec 模板、OpenSpec、Superpowers 等常见方法。通用工具用于迁移和比较，不替代对真实业务的判断。
+
+## 当前实现与验证边界
+
+截至 2026-09-14，工作台按 **Harness + 记忆系统 + 工作流蒸馏** 建设。当前代码已有经验候选、审核与撤回、跨事项召回、采用快照及固定四阶段流程接入，首页事项内已有“经验与流程”面板。专项测试、浏览器操作和真实跨事项复用仍待验收，不能把首版实现写成已完成闭环。代码对照及建设要求见 [工作台范式与闭环建设](docs/architecture/工作台范式与闭环建设.md)。
+
+本次核对结果：安装检查通过，启动与环境相关测试 23 项通过，工作台阻断 Eval 10 项通过；事项与交付相关回归运行 30 项，仍有 1 项失败（`test_changed_main_source_cannot_be_overwritten`，预期 `review`，实际 `rework`）。该结果更新了建设文档中的早前回归记录，但不代表问题已全部解决。本次未执行全量测试、浏览器验收或独立 FlowERP 业务验收。
 
 ## 两个仓库如何协作
 
@@ -124,7 +130,7 @@ python -m venv .venv
 
 学生从 [课程资料总入口](docs/README.md) 开始，课堂投影与复习使用 [L01～L16 独立课件](docs/courses/课件获取与本地检查.md)。对外课程名与 16 讲标题以 [课表｜Codex AI 工程交付行动营](docs/课表｜Codex AI 工程交付行动营.md) 的「主题」列为准，每讲四项内容合同以 [16 讲课程大纲](docs/课程大纲-Codex-FDE行动营-个人研发自动化工作台.md) 为准。基础较弱或尚未配置环境的学员先完成 [L00 课前准备](docs/courses/L00/L00｜课前准备：装好工具，跑通第一次环境自检.md)中的操作与自检。L00 不计入正式 16 讲，也不产生工作台或 FlowERP 产品增量。
 
-## 5 分钟跑起来（本仓库课程参考环境）
+## 安装与启动（本仓库课程参考环境）
 
 ### 1. 准备环境
 
@@ -137,10 +143,13 @@ Windows PowerShell：
 ```powershell
 py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e .
+.\.venv\Scripts\python.exe -X utf8 -c "import workbench, eval; print('imports-ok')"
 .\.venv\Scripts\Activate.ps1
 ```
 
-macOS：
+导入检查成功时输出 `imports-ok`。Windows 的解释器位于 `.\.venv\Scripts\python.exe`，不要使用 macOS/Linux 的 `.venv/bin/python`。已激活环境（提示符显示 `(.venv)`）后可直接使用 `python`；可用 `python -c "import sys; print(sys.executable)"` 核对路径。若 PowerShell 阻止激活脚本，可省略激活，将后续命令中的 `python` 换成 `.\.venv\Scripts\python.exe`。
+
+macOS / Linux：
 
 ```bash
 python3.11 -m venv .venv
@@ -172,9 +181,11 @@ python -X utf8 -m workbench.cli demo
 
 #### 一条命令自动加载两个系统
 
-在仓库根目录执行 `python main.py`，或双击 `打开工作台.cmd`，即可同时启动或复用工作台（8001）与 FlowERP（8000）。从系统 Python 调用 `main.py` 时会转入本仓库 `.venv`；请勿使用其他项目的已激活虚拟环境。服务在后台运行，启动命令完成后仍可访问页面。需要打开浏览器时使用 `python main.py --open-browser`。
+在两个仓库环境均已准备好、FlowERP 已登记或已设置 `FLOWERP_PROJECT_ROOT` 后，在本仓库根目录执行 `python main.py`，或双击 `打开工作台.cmd`，启动工作台（8001）与 FlowERP（8000）。从系统 Python 调用 `main.py` 时会转入本仓库 `.venv`；请勿使用其他项目的已激活虚拟环境。服务在后台运行，启动命令完成后仍可访问页面。需要打开浏览器时使用 `python main.py --open-browser`。
 
-启动结果中 `started` 表示新启动，`reused` 表示复用已有服务；若端口属于其他服务或不同数据目录，会报错，不会自动切换端口或数据库。通过该入口新启动的工作台启用网页代码执行能力，每次具体执行仍需在网页核对方案并授权；复用服务时保留其原有启动设置。
+默认会核对身份并重启同目录的旧工作台；有运行中事项时会拒绝重启。`python main.py --reuse` 则复用已有工作台。自动重启目前仅支持 Windows，macOS/Linux 已有服务时请使用 `--reuse`，或手动停止后重新启动。启动结果中 `started` 表示新启动，`restarted` 表示已重启，`reused` 表示复用；若端口属于其他服务或不同数据目录，会报错，不会自动切换端口或数据库。通过该入口新启动的工作台启用网页代码执行能力，每次具体执行仍需在网页核对方案并授权；复用服务时保留其原有启动设置。
+
+若输出客户项目 `unavailable`，命令返回失败，但已启动的工作台仍可访问。先检查 FlowERP 仓库选择与其 `.venv`；只使用工作台时直接运行 `python -X utf8 -m workbench.cli serve-workbench`。
 
 两个入口及 `workbench.cli serve-workbench`、`workbench.cli serve` 都读取本机 `.runtime/services.json`。下面是 2026-09-06 恢复操作留下的历史配置示例；新安装无需创建它，已有安装应核对自己的文件，不要复制示例覆盖：
 
@@ -189,7 +200,8 @@ python -X utf8 -m workbench.cli demo
 
 `main.py --runtime-dir` 只覆盖工作台目录，`--erp-runtime-dir` 只覆盖 ERP 目录；`--port` 指工作台端口，`--erp-port` 指 ERP 端口。这个入口现在启动两个系统，旧的单 ERP 启动方式请使用 `python -m workbench.cli serve`。显式指定目录仍用于隔离实验；日常启动无需手写目录。以下完整路径命令用于排错。
 
-#### 历史恢复案例与手动排错（仅适用于 2026-09-06 原安装）
+<details>
+<summary>历史恢复案例与手动排错（仅适用于 2026-09-06 原安装；新安装跳过）</summary>
 
 下列路径是该次恢复记录，不是新克隆仓库的默认配置。仅排查原安装时，在 `D:\work\CodexFDE` 下执行。先检查 8000、8001 是否已有服务；已有服务可访问时直接使用。需要重启时先确认没有执行中的任务，再停止对应服务，沿用实际运行目录。
 
@@ -228,6 +240,8 @@ Invoke-RestMethod http://127.0.0.1:8000/api/v1/setup/status
 ```
 
 工作台健康接口的 `database` 应指向原 `.runtime/workbench.db`；ERP 的 `initialized` 应为 `true`。若突然出现“创建您的工作空间”或历史列表为空，先核对服务的 `--runtime-dir` 和数据库，不要立即新建账号。恢复后的本地 ERP 当时返回 `authentication_required: false`；启用认证的环境使用已有组织代码、账号和密码，不存在通用默认密码。
+
+</details>
 
 #### 首次安装且没有历史数据
 
@@ -404,7 +418,7 @@ python -X utf8 -m workbench.cli backup
 python -X utf8 -m workbench.cli verify-backup <BACKUP_PATH>
 ```
 
-只启动 FlowERP 客户项目的容器：
+Compose 默认启动工作台与 FlowERP 两个服务；FlowERP 镜像从独立仓库构建，须先准备该仓库。只启动客户项目时，在下列命令末尾追加服务名 `flowerp`：
 
 ```bash
 docker compose -f deploy/docker-compose.yml up --build
@@ -478,6 +492,16 @@ harness-workbench plugin-events
 可选完整 Harness 用来对照 Session/Profile/Plugin、thread、event stream、approval 与 interrupt；边界见 [个人 AI 研发工作台](docs/reference/个人AI研发工作台.md)。不得声称已等价于其他产品或已接入官方 app-server。
 
 ## 常见问题
+
+### PowerShell 无法识别 `.venv/bin/python`
+
+这是 macOS/Linux 路径。在 Windows 仓库根目录使用：
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 -c "import workbench, eval; print('imports-ok')"
+```
+
+已激活本仓库 `.venv` 时也可使用 `python`。若提示模块不存在，先在本仓库运行 `.\.venv\Scripts\python.exe -m pip install -e .`，再执行 `environment-check`。
 
 ### `flowerp-workbench` 或 `harness-workbench` 找不到
 

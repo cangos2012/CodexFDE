@@ -1,17 +1,19 @@
 """Create an explicit ledger-defect teaching copy. Never overwrite a directory."""
 import argparse
 from pathlib import Path
-import shutil
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+from workbench.course_experiments import copy_experiment_sources
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output',type=Path,required=True)
     args=parser.parse_args()
-    root=Path(__file__).resolve().parents[4]
     target=args.output.resolve()
     if target.exists(): parser.error('output already exists; choose a new empty location')
     target.mkdir(parents=True)
-    shutil.copytree(root/'flowerp',target/'flowerp',ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
+    copy_experiment_sources(target, packages=('flowerp',))
     source=target/'flowerp/service.py'
     text=source.read_text(encoding='utf-8')
     needle='            if exists:\n                row = conn.execute('

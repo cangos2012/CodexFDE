@@ -10,6 +10,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+from workbench.course_experiments import ensure_product_process
+ensure_product_process(__file__)
 from eval import harness
 from flowerp import ERPService, ERPStore
 from flowerp.models import InsufficientStock, OrderLine

@@ -5,6 +5,11 @@ import hashlib
 import json
 import shutil
 import time
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+from workbench.course_experiments import ensure_product_process
+ensure_product_process(__file__)
 
 from flowerp import ERPStore, ERPService
 from flowerp.operations import BackupService

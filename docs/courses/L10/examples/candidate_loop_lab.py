@@ -10,7 +10,6 @@ import argparse
 import difflib
 import hashlib
 import json
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -19,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT))
 from agent.loop import run_loop
 from eval.report_contract import validate_report
+from workbench.course_experiments import copy_experiment_sources
 
 CASES = ["l10_legal", "l10_draft", "l10_cancelled", "l10_repeat"]
 GOOD = '            if order["status"] != OrderStatus.RESERVED:'
@@ -40,14 +40,14 @@ def run(mode: str, directory: Path) -> dict:
     directory.mkdir(parents=True, exist_ok=False)
     candidate = directory / "candidate"
     candidate.mkdir()
-    for package in ("flowerp", "eval"):
-        shutil.copytree(ROOT / package, candidate / package,
-                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    copy_experiment_sources(candidate)
     # Keep the real Harness; register four declared business checks locally.
     business = (ROOT / "docs/courses/L10/examples/order_transition_lab.py").read_text(encoding="utf-8")
     business = business.split('if __name__ == "__main__":')[0]
     business = business.replace('sys.path.insert(0, str(Path(__file__).resolve().parents[4]))', '')
     business = business.replace('from eval import harness', '')
+    business = business.replace('from workbench.course_experiments import ensure_product_process', '')
+    business = business.replace('ensure_product_process(__file__)', '')
     (candidate / "shipping_checks.py").write_text(business, encoding="utf-8")
     (candidate / "eval/cases.py").write_text('# Only the declared L10 checks are registered in this candidate.\n', encoding="utf-8")
     harness = candidate / "eval/harness.py"
@@ -65,7 +65,7 @@ EVALS = [("l10_legal", "blocking", selected("legal")),
 ''' + code[end:]
     harness.write_text(code, encoding="utf-8")
     service = candidate / "flowerp/service.py"
-    original = (ROOT / "flowerp/service.py").read_text(encoding="utf-8")
+    original = service.read_text(encoding="utf-8")
     pos = original.index('    def ship_order(')
     assert GOOD in original[pos:]
     broken = original[:pos] + original[pos:].replace(GOOD, BAD, 1)
@@ -82,7 +82,7 @@ EVALS = [("l10_legal", "blocking", selected("legal")),
         command = [sys.executable, '-B', '-X', 'utf8', '-m', 'eval.harness', '--suite', 'blocking', '--report-path', str(report_path)]
         for case in CASES:
             command += ['--case', case]
-        result = subprocess.run(command, cwd=candidate, env=env, capture_output=True, text=True, timeout=60)
+        result = subprocess.run(command, cwd=candidate, env=env, capture_output=True, text=True, encoding='utf-8', timeout=60)
         raw = {'command': command, 'cwd': str(candidate), 'exit_code': result.returncode,
                'stdout': result.stdout, 'stderr': result.stderr, 'service_sha256': fingerprint(service),
                'checks_sha256': fingerprint(candidate / 'shipping_checks.py')}

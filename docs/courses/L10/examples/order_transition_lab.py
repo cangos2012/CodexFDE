@@ -12,6 +12,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+from workbench.course_experiments import ensure_product_process
+ensure_product_process(__file__)
 from flowerp.models import InvalidTransition, OrderLine
 from flowerp.service import ERPService
 from flowerp.store import ERPStore

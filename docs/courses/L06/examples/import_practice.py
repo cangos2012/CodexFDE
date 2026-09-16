@@ -9,6 +9,8 @@ import subprocess
 import sys
 
 ROOT=Path(__file__).resolve().parents[4]
+sys.path.insert(0, str(ROOT))
+from workbench.course_experiments import copy_experiment_sources
 HERE=Path(__file__).resolve().parent
 L05=('tests/test_l05_receiving.py','tests/test_l05_scope.py','eval/l05_scope.py')
 ALLOWED=('eval/l06_runner.py','flowerp/import_batch.py')
@@ -35,8 +37,7 @@ def prepare(run,l05_session):
     run=run.resolve()
     if run.exists():raise FileExistsError('Use a new run directory; resume from existing session.json')
     run.mkdir(parents=True);candidate=run/'candidate';candidate.mkdir()
-    for name in ['flowerp','eval']:
-        shutil.copytree(ROOT/name,candidate/name,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
+    copy_experiment_sources(candidate)
     (candidate/'tests').mkdir();(candidate/'tests/__init__.py').write_text('',encoding='utf8')
     for name in L05:
         (candidate/name).parent.mkdir(exist_ok=True);shutil.copy2(source/name,candidate/name)

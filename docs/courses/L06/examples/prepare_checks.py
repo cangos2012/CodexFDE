@@ -4,6 +4,10 @@ import ast
 import hashlib
 import json
 from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+from workbench.external_project import flowerp_root
 
 L05=('tests/test_l05_receiving.py','tests/test_l05_scope.py','eval/l05_scope.py')
 FROZEN=L05+('tests/test_l06_runner.py','eval/l06_checks.py','eval/harness.py')
@@ -35,7 +39,7 @@ def prepare(candidate,l05_session,output):
     service=candidate/'flowerp/service.py';code=service.read_text('utf8')
     prerequisite=None
     if '    def export_inventory(' not in code:
-        reference=Path(__file__).resolve().parents[4]/'flowerp/service.py'
+        reference=flowerp_root()/'flowerp/service.py'
         reference_text=reference.read_text('utf8')
         methods=[node for node in ast.walk(ast.parse(reference_text)) if isinstance(node,ast.FunctionDef) and node.name=='export_inventory']
         if len(methods)!=1:raise ValueError('reference export prerequisite is ambiguous')

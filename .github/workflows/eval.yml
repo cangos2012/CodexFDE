@@ -49,6 +49,17 @@ jobs:
           node-version: "22"
       - name: Unit tests
         run: python -X utf8 -m unittest discover -s tests -v
+      - name: Local course experiments
+        if: ${{ !cancelled() }}
+        run: python -B -X utf8 scripts/audit_course_experiments.py --output-dir .runtime/course-experiments-ci
+      - name: Upload course experiment process evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: course-experiment-process-evidence
+          path: .runtime/course-experiments-ci/*.json
+          if-no-files-found: error
+          include-hidden-files: true
       - name: Browser state tests
         if: ${{ !cancelled() }}
         run: node --test tests/*.test.cjs

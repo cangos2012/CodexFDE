@@ -11,6 +11,8 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT))
+from workbench.course_experiments import ensure_product_process
+ensure_product_process(__file__)
 from flowerp.import_export import ImportExportService
 from flowerp.identity import SYSTEM_PRINCIPAL, IdentityService
 from flowerp.models import Conflict

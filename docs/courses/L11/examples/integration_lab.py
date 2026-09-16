@@ -4,12 +4,13 @@ Teacher injection and restoration, sequential processes, no agents or model use.
 Every run needs a fresh directory. Reports and state snapshots are preserved.
 """
 from __future__ import annotations
-import argparse, ast, difflib, hashlib, json, os, shutil, subprocess, sys
+import argparse, ast, difflib, hashlib, json, os, subprocess, sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT))
 from eval.report_contract import validate_report
+from workbench.course_experiments import copy_experiment_sources
 
 CHECKS = '''import json, os, sqlite3, tempfile
 from pathlib import Path
@@ -71,9 +72,8 @@ def digest(path): return hashlib.sha256(path.read_bytes()).hexdigest()
 def run(directory):
     directory=directory.resolve(); directory.mkdir(parents=True, exist_ok=False)
     candidate=directory/'candidate'; candidate.mkdir()
-    for package in ('flowerp','eval'):
-        shutil.copytree(ROOT/package,candidate/package,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
-    source=(ROOT/'eval/cases.py').read_text(encoding='utf-8')
+    origins = copy_experiment_sources(candidate)
+    source=(Path(origins['product_root'])/'eval/cases.py').read_text(encoding='utf-8')
     node=next(n for n in ast.parse(source).body if isinstance(n,ast.FunctionDef) and n.name=='purchase_request_preserves_reason')
     field_check=ast.get_source_segment(source,node)
     (candidate/'purchase_checks.py').write_text(CHECKS+'\n'+field_check+'\n',encoding='utf-8')
@@ -82,7 +82,7 @@ def run(directory):
     modes=('normal','zero','negative','blank-reason','unknown-sku','duplicate-id')
     registry='from purchase_checks import complete, purchase_request_preserves_reason\nEVALS = [("purchase_request_preserves_reason","blocking",purchase_request_preserves_reason)] + [("l11_"+m,"blocking",lambda m=m: complete(m)) for m in '+repr(modes)+']\n'
     (candidate/'eval/harness.py').write_text(code[:start]+registry+code[end:],encoding='utf-8')
-    service=candidate/'flowerp/service.py'; original=(ROOT/'flowerp/service.py').read_text(encoding='utf-8')
+    service=candidate/'flowerp/service.py'; original=service.read_text(encoding='utf-8')
     pos=original.index('    def propose_purchase('); stop=original.index('    def purchase(',pos)
     marker='        return self.purchase(pid)'
     injection='        self.receive_stock(sku, quantity, "teaching-premature-" + pid)\n'
