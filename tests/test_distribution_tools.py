@@ -35,7 +35,7 @@ class DistributionTests(unittest.TestCase):
     def test_contract_sync_reads_lesson_number_from_all_canonical_directories(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            chapter = root / 'docs/courses/L16/阅读讲义.md'
+            chapter = root / 'docs/courses/L16/辅导资料.md'
             chapter.parent.mkdir(parents=True)
             chapter.write_text('# Old title\n\nKeep the real example.\n', encoding='utf-8')
             with patch.object(sync_outline_contracts, 'ROOT', root), \

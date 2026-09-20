@@ -79,9 +79,7 @@ instance/
 
 
 # Docs: exclude slide folders and PowerPoint files
-/docs/**/slides/
 /docs/**/*.pptx
-/docs/courses/教师资料/
 /docs/courses/slides/
 
 

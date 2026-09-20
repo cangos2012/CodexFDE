@@ -24,6 +24,32 @@ function workflow(stage) {
   return {id:'I1',stage,enabled:true,messages:[],iterations:[],documents:[],progress:[],
     proposal:{goal:'goal',acceptance:[],non_goals:[],sources:[],write_scope:[],steps:[],questions:['Which scope?']}};
 }
+
+test('Eval panel distinguishes warning, stale evidence, running and failed attempts',()=>{
+  const {context,node}=setup();
+  const work=workflow('review');
+  work.task={id:'T1',status:'review',events:[]};
+  work.eval_harness={available:true,can_run:true,freshness:'current',
+    summary:{decision:'pass',passed:1,total:2,blocking_failed:0,observing_failed:1},
+    results:[{name:'help',level:'observing',passed:false,duration_ms:3,evidence:'<script>not executable</script>'}]};
+  context.renderInitiativeWork(work);
+  assert.match(node('iw-eval-summary').textContent,/观察告警 1/);
+  assert.match(node('iw-eval-results').children[0].children[0].textContent,/观察.*3 ms/);
+  assert.equal(node('iw-eval-results').children[0].children[1].textContent,'<script>not executable</script>');
+  work.eval_harness.freshness='stale';
+  context.renderInitiativeWork(work);
+  assert.equal(node('iw-accept').disabled,true);
+  assert.match(node('iw-eval-source').textContent,/旧结论不可用于验收/);
+  work.stage='checking';
+  context.renderInitiativeWork(work);
+  assert.equal(node('iw-eval-run').disabled,true);
+  assert.equal(node('iw-accept').hidden,true);
+  assert.equal(node('iw-pane-result').hidden,false);
+  work.stage='failed';work.eval_harness={available:false,error:'invalid report'};
+  context.renderInitiativeWork(work);
+  assert.match(node('iw-eval-summary').textContent,/未形成可信报告/);
+  assert.equal(node('iw-eval-results').children.length,0);
+});
 test('failed, interrupted and unreadable work never appears as an outcome',()=>{
   const {context}=setup();
   for(const stage of ['failed','interrupted','cancelled','rework','unavailable'])

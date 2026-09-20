@@ -16,8 +16,8 @@ from pathlib import Path
 from .lesson_constructibility import apply_student_start
 
 
-SOURCE_DIRS = {".codex", ".github", "agent", "deploy", "docs", "eval", "flowerp", "harness_web",
-               "scripts", "tests", "web", "workbench", "workbench_web"}
+SOURCE_DIRS = {".codex", ".github", "agent", "deploy", "docs", "eval", "harness_web",
+               "scripts", "tests", "workbench", "workbench_web"}
 ROOT_FILES = {"AGENTS.md", "FDE_SPEC.md", "CI_GATE_SPEC.md", "README.md", "pyproject.toml", "main.py", ".gitignore", "首次使用.cmd", "打开工作台.cmd"}
 TEXT_SUFFIXES = {".py", ".md", ".json", ".toml", ".yaml", ".yml", ".js", ".mjs", ".html", ".css",
                  ".txt", ".sh", ".ps1", ".code-workspace", ".svg", ".drawio"}
@@ -32,6 +32,12 @@ def _git(target: Path, *args: str) -> str:
 
 
 def source_paths(source: Path, runtime: Path) -> list[Path]:
+    # A controller snapshot must not silently adopt a stale embedded product or
+    # discard edits from an existing combined teaching candidate.
+    embedded = [name for name in ("flowerp", "web") if (source / name).exists()]
+    if embedded:
+        raise ValueError("控制仓库含客户业务目录：" + ", ".join(embedded)
+                         + "；FlowERP 须使用独立项目。已有组合候选请按原任务续做，不能作为控制仓库快照。")
     # Enumerate only course source, before creating the destination. No environment,
     # runtime database, credentials, binary slide output or private build directory.
     paths = [source / name for name in ROOT_FILES if (source / name).is_file()]
@@ -86,7 +92,7 @@ def prepare_source_snapshot(repository_root: str | Path, runtime_dir: str | Path
         destination.write_bytes(content)
         manifest[relative.as_posix()] = hashlib.sha256(content).hexdigest()
     external_source = None
-    if lesson_number >= 4 and not (target / 'flowerp').is_dir():
+    if lesson_number >= 4:
         from .external_project import flowerp_root
         product = flowerp_root()
         product_paths = []

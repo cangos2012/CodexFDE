@@ -314,7 +314,7 @@ python -X utf8 -m workbench.cli course-contract --lesson 3
 python -X utf8 -m workbench.cli course-spec --lesson 3
 ```
 
-以 L03 为例，详细教学设计见 [把模糊需求变成可验收 Spec](docs/courses/L03/阅读讲义.md)，学生行动卡见 [L03 Spec 驱动](docs/courses/L03/行动卡.md)。
+以 L03 为例，详细教学设计见 [把模糊需求变成可验收 Spec](docs/courses/L03/辅导资料.md)，学生行动卡见 [L03 Spec 驱动](docs/courses/L03/行动卡.md)。
 
 ### 从 L04 起执行真实交付
 

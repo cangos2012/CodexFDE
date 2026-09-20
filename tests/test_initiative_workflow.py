@@ -288,7 +288,7 @@ class InitiativeWorkflowTests(unittest.TestCase):
                          'docs/courses/L05/行动卡.md')
         excluded_docs = ('docs/courses/L05/实践操作手册.md', 'docs/courses/L05/实践操作手册.docx',
                          'docs/courses/L05/slides.pptx', 'docs/courses/L05/slides.PPT',
-                         'docs/courses/L05/阅读讲义.md', 'docs/courses/L05/L05-阅读讲义.docx',
+                         'docs/courses/L05/辅导资料.md', 'docs/courses/L05/L05-辅导资料.docx',
                          'docs/courses/L05/assets/diagram.drawio', 'docs/courses/L05/assets/diagram.png',
                          'docs/courses/L05/其他资料.md', 'docs/courses/L05/examples/secrets.py',
                          'docs/courses/L05/skills/.env', 'docs/courses/L05/examples/__pycache__/example.pyc')

@@ -16,7 +16,7 @@ from .initiative_research import InitiativeResearch
 from .learning import LearningStore, canonical
 
 
-BUSY = {'researching', 'queued', 'executing', 'cancelling', 'integrating'}
+BUSY = {'researching', 'queued', 'executing', 'checking', 'cancelling', 'integrating'}
 INTEGRATION_LOCK = threading.Lock()
 
 
@@ -121,7 +121,7 @@ class InitiativeWorkflow:
             data = self._load(item_id)
             if data['stage'] in {'cancelled', 'cancelling'}:
                 return self.get(item_id)
-            if data['stage'] not in {'queued', 'executing', 'researching'}:
+            if data['stage'] not in {'queued', 'executing', 'researching', 'checking'}:
                 raise ValueError('当前没有可取消的执行')
             self.cancel_events[item_id].set()
             data['stage'] = 'cancelling'
@@ -332,7 +332,126 @@ class InitiativeWorkflow:
                 'summary': (task.get('result') or {}).get('summary'), 'diff': execution.get('diff', ''),
                 'changed_files': execution.get('changed_files', []), 'execution': execution,
                 'events': task['events'][-80:]}
+            from .eval_harness import report_view
+            latest = next((r for r in reversed(data.get('eval_runs', []))
+                           if r['task_id'] == task['id']), None)
+            report = latest.get('report') if latest else task.get('result')
+            data['eval_harness'] = report_view(report, data.get('workspace'), self.runtime)
+            data['eval_harness']['error'] = latest.get('error', '') if latest else ''
+            data['eval_harness']['can_run'] = bool(self.enabled and not data.get('v0') and
+                data['stage'] in {'review', 'rework'} and data.get('workspace') and
+                ((data.get('plan') or {}).get('project') or {}).get('eval_command'))
+        from .repair_loop import project as loop_project
+        data['repair_loop'] = loop_project(data.get('repair_loop_config'), data.get('iterations', []), self.tasks)
+        from .quality_hook import view as hook_view
+        data['quality_hook'] = hook_view(data.get('hook_package'), data.get('workspace'), data.get('active_task_id'))
+        data['quality_hook']['can_prepare'] = bool(not data.get('v0') and
+            data['stage'] in {'review', 'rework'} and data.get('workspace') and data.get('active_task_id') and
+            ((data.get('plan') or {}).get('project') or {}).get('eval_command'))
+        from .ci_review import view as ci_view
+        data['ci_evidence'] = ci_view(data.get('ci_evidence_runs'))
+        data['ci_evidence']['can_record'] = bool(data.get('active_task_id') and
+                                                 data['stage'] in {'review', 'rework'})
         return data
+
+    def configure_loop(self, item_id, actor, revision, fields):
+        """Freeze L10 bounds for subsequent rework rounds on this initiative."""
+        from .repair_loop import validate_config
+        actor = self.actor(actor)
+        with self.lock:
+            data = self._load(item_id)
+            self._check(data, revision, {'idle', 'clarifying', 'ready', 'confirmed', 'review', 'rework',
+                                        'failed', 'interrupted', 'cancelled'})
+            config = validate_config(fields)
+            data['repair_loop_config'] = config
+            self._event(data, 'user', '保存有界修复 Loop：最多 {max_rounds} 轮，时间 {time_budget_seconds} 秒，Token {token_budget}'.format(**config), actor=actor)
+            self._save(data)
+        return self.get(item_id)
+
+    def prepare_hook(self, item_id, actor, revision):
+        from .quality_hook import prepare
+        actor = self.actor(actor)
+        with self.lock:
+            data = self._load(item_id)
+            self._check(data, revision, {'review', 'rework'})
+            project = (data.get('plan') or {}).get('project')
+            if data.get('v0') or not project or not data.get('workspace') or not data.get('active_task_id'):
+                raise ValueError('请先形成项目候选及已确认的检查命令')
+            package = prepare(self.runtime, data['workspace'], project, data['active_task_id'], item_id, actor)
+            data['hook_package'] = package
+            data.setdefault('hook_packages', []).append(package)
+            self._event(data, 'user', '准备候选 Stop Hook 待审文件；尚未安装或信任', actor=actor,
+                        task_id=data['active_task_id'], package_path=package['path'])
+            self._save(data)
+        return self.get(item_id)
+
+    def run_eval(self, item_id, actor, revision):
+        """Re-run the confirmed command without invoking Codex or accepting a task."""
+        actor = self.actor(actor)
+        if not self.enabled:
+            raise ValueError('当前服务未开启代码执行')
+        with self.lock:
+            data = self._load(item_id)
+            self._check(data, revision, {'review', 'rework'})
+            command = ((data.get('plan') or {}).get('project') or {}).get('eval_command')
+            if data.get('v0') or not command or not data.get('workspace') or not data.get('active_task_id'):
+                raise ValueError('当前事项没有可复验的项目候选与已确认检查命令')
+            prior = data['stage']
+            data.update(stage='checking', error='')
+            self._event(data, 'user', '运行候选 Eval Harness，保留原报告', actor=actor)
+            self._launch(data, self._run_eval, actor, prior, list(command))
+        return self.get(item_id)
+
+    def record_ci_evidence(self, item_id, actor, revision, fields):
+        """Verify remote CI identity/report bytes and retain a task-linked record."""
+        from .ci_review import retain
+        actor = self.actor(actor)
+        if not isinstance(fields, dict):
+            raise ValueError('CI 证据格式无效')
+        with self.lock:
+            data = self._load(item_id)
+            self._check(data, revision, {'review', 'rework'})
+            if not data.get('active_task_id'):
+                raise ValueError('当前事项没有可绑定的交付候选')
+            record = retain(self.runtime, data['active_task_id'], fields.get('report_text'),
+                fields.get('envelope'), run_url=fields.get('run_url'),
+                job_conclusion=fields.get('job_conclusion'), candidate_sha=fields.get('candidate_sha'), actor=actor)
+            data.setdefault('ci_evidence_runs', []).append(record)
+            self.tasks.append_event(data['active_task_id'], 'CI 独立复验证据已核验', actor=actor,
+                evidence={k: v for k, v in record.items() if k != 'artifacts'})
+            self._event(data, 'user', '核验 CI 独立复验：' + record['job_conclusion'], actor=actor,
+                        task_id=data['active_task_id'], run_id=record['run_id'])
+            self._save(data)
+        return self.get(item_id)
+
+    def _run_eval(self, item_id, actor, prior, command):
+        from .project_delivery import CandidateProjectEval
+        with self.lock:
+            data = self._load(item_id)
+        try:
+            report = CandidateProjectEval(data['workspace'], self.runtime, data['active_task_id'],
+                                          command, 'manual-recheck')()
+        except Exception as error:
+            with self.lock:
+                current = self._load(item_id)
+                current.setdefault('eval_runs', []).append({'task_id': data['active_task_id'],
+                    'actor': actor, 'at': time.time(), 'error': str(error)})
+                self._save(current)
+            raise
+        with self.lock:
+            from .execution_control import checkpoint
+            checkpoint()
+            current = self._load(item_id)
+            current.setdefault('eval_runs', []).append({'task_id': data['active_task_id'],
+                'actor': actor, 'at': time.time(), 'report': report})
+            passed = report['summary']['decision'] == 'pass'
+            current['stage'] = prior if passed else 'rework'
+            if not passed and self.tasks.get(data['active_task_id'])['status'] == 'review':
+                self.tasks.transition(data['active_task_id'], 'rework', '候选复验存在阻断失败', actor=actor, result=report)
+            self.tasks.append_event(data['active_task_id'], '候选 Eval 复验完成', actor=actor,
+                                    evidence={'summary': report['summary'], 'runner': report['runner']})
+            self._event(current, 'system', '候选复验完成；检查通过仍需人审。' if passed else '候选复验未通过，请返工。')
+            self._save(current)
 
     def learning_action(self, item_id, actor, revision, fields):
         """All governance remains in the initiative's existing home workspace."""
@@ -433,6 +552,11 @@ class InitiativeWorkflow:
         with self.lock:
             data = self._load(item_id)
             self._check(data, revision, {'idle', 'clarifying', 'ready', 'confirmed', 'review', 'rework', 'failed', 'interrupted', 'cancelled', 'accepted'})
+            if data['stage'] == 'rework' and (data.get('repair_loop_config') or {}).get('enabled'):
+                from .repair_loop import project as loop_project
+                loop = loop_project(data['repair_loop_config'], data.get('iterations', []), self.tasks)
+                if not loop['can_continue']:
+                    raise ValueError('Loop 已停止：' + loop['reason'] + '。请先按 handoff 核对证据并由负责人决定。')
             item = self.initiatives.get(item_id)
             if item.get('decision') in {'defer', 'reject', 'stop'}:
                 raise ValueError('事项已暂缓或停止，请先复查决定')
@@ -608,7 +732,8 @@ class InitiativeWorkflow:
                 current = self._load(item_id)
                 current['active_task_id'] = task['id']
                 current['iterations'].append({'task_id': task['id'], 'plan_id': data['plan']['plan_id'],
-                                              'document_version': data['plan'].get('document_version')})
+                                              'document_version': data['plan'].get('document_version'),
+                                              'at': time.time()})
                 self._save(current)
             self.tasks.append_event(task['id'], '网页具名授权日常研发', actor=actor,
                 evidence={'initiative_id': item_id, 'plan_id': data['plan']['plan_id']})
@@ -651,6 +776,15 @@ class InitiativeWorkflow:
                 raise ValueError('请由已确认的验收负责人署名验收：' + data['reviewer'])
             if manifest(data['workspace'], self.runtime) != data['candidate_manifest']:
                 raise ValueError('候选源码在检查后发生变化，请重新复验')
+            from .eval_harness import report_view
+            latest = next((r for r in reversed(data.get('eval_runs', []))
+                           if r['task_id'] == data['active_task_id']), None)
+            report = latest['report'] if latest else self.tasks.get(data['active_task_id']).get('result')
+            view = report_view(report, data['workspace'], self.runtime)
+            if view['freshness'] in {'stale', 'unavailable'}:
+                raise ValueError('Eval 报告或候选来源已变化，请重新复验')
+            if latest and report['summary']['decision'] != 'pass':
+                raise ValueError('最近一次 Eval 未通过，不能接受候选')
             self.learning.check_acceptance(data['active_task_id'])
             self.tasks.review(data['active_task_id'], actor, 'approve', note.strip())
             self.learning.finish(data['active_task_id'], note=note.strip())

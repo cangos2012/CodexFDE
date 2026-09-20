@@ -40,6 +40,20 @@ class ScheduleTests(unittest.TestCase):
         ))
         self.assertTrue(result["parallel"])
 
+    def test_shared_runtime_resource_is_a_conflict(self) -> None:
+        with self.assertRaises(ValueError):
+            assert_parallel_safe((
+                Subtask("tests", ("tests/a.py",), resource_set=("db:l11",)),
+                Subtask("risk", (), ("flowerp/service.py",), ("db:l11",)),
+            ))
+
+    def test_different_input_versions_are_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            assert_parallel_safe((
+                Subtask("a", ("tests/a.py",), input_version="v1"),
+                Subtask("b", ("tests/b.py",), input_version="v2"),
+            ))
+
 
 if __name__ == "__main__":
     unittest.main()

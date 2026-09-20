@@ -14,6 +14,20 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class SourceSnapshotTests(unittest.TestCase):
+    def test_embedded_product_is_rejected_before_snapshot_writes(self):
+        for package in ('flowerp', 'web'):
+            with self.subTest(package=package), tempfile.TemporaryDirectory() as directory:
+                source = Path(directory) / 'controller'
+                source.mkdir()
+                self.source(source)
+                (source / package).mkdir()
+                original = source / package / 'source.txt'
+                original.write_text('preserve existing evidence', encoding='utf-8')
+                with self.assertRaisesRegex(ValueError, '控制仓库含客户业务目录'):
+                    prepare_source_snapshot(source, source / '.runtime', 5)
+                self.assertFalse((source / '.runtime').exists())
+                self.assertEqual('preserve existing evidence', original.read_text(encoding='utf-8'))
+
     def test_external_product_is_copied_only_to_candidate_with_provenance(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / 'controller'; source.mkdir()

@@ -116,6 +116,103 @@ class ProjectInitiativeTests(unittest.TestCase):
         (self.root / 'second/value.txt').write_text('actual ERP change')
         self.assertEqual('changed', self.state()['source_check']['status'])
 
+    def test_eval_recheck_keeps_review_and_records_fresh_history(self):
+        self.ready()
+        self.call('execute')
+        self.assertEqual('review', self.wait()['stage'])
+        self.call('run_eval')
+        state = self.wait()
+        self.assertEqual('review', state['stage'], state['error'])
+        self.assertEqual('current', state['eval_harness']['freshness'])
+        self.assertEqual(1, len(state['eval_runs']))
+        self.assertEqual('review', self.tasks.get(state['active_task_id'])['status'])
+        self.call('run_eval')
+        self.assertEqual(2, len(self.wait()['eval_runs']))
+        latest = self.state()['eval_runs'][-1]['report']['runner']['report_path']
+        Path(latest).write_text('{}')
+        self.assertEqual('stale', self.state()['eval_harness']['freshness'])
+        with self.assertRaisesRegex(ValueError, '来源已变化'):
+            self.call('accept', 'checked', actor='reviewer')
+
+    def test_hook_preparation_binds_confirmed_customer_candidate_without_installing(self):
+        self.assertFalse(self.state()['quality_hook']['can_prepare'])
+        with self.assertRaises(ValueError):
+            self.call('prepare_hook')
+        self.ready()
+        self.call('execute')
+        state = self.wait()
+        before = manifest(state['workspace'], self.runtime)
+        self.assertTrue(state['quality_hook']['can_prepare'])
+        prepared = self.call('prepare_hook')
+        self.assertEqual('review', prepared['stage'])
+        self.assertEqual('prepared', prepared['quality_hook']['status'])
+        folder = Path(prepared['quality_hook']['path'])
+        binding = json.loads((folder / 'binding.json').read_text(encoding='utf-8'))
+        self.assertEqual(self.registered[1]['id'], binding['project_id'])
+        self.assertEqual(self.registered[1]['eval_command'], binding['command'])
+        self.assertEqual(state['workspace'], binding['workspace'])
+        self.assertEqual(before, manifest(state['workspace'], self.runtime))
+        self.assertFalse((Path(state['workspace']) / '.codex/hooks.json').exists())
+        with self.assertRaisesRegex(ValueError, '进展已变化'):
+            self.service.prepare_hook(self.item['id'], 'owner', state['revision'])
+        from http.client import HTTPConnection
+        from http.server import ThreadingHTTPServer
+        from workbench.workbench_server import WorkbenchApp, make_handler
+        app = WorkbenchApp(self.runtime)
+        app.initiative_workflow = self.service
+        server = ThreadingHTTPServer(('127.0.0.1', 0), make_handler(app))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            conn = HTTPConnection('127.0.0.1', server.server_port)
+            path = '/api/v1/initiatives/' + self.item['id'] + '/workflow/prepare-hook'
+            payload = json.dumps({'actor': 'owner', 'revision': prepared['revision']})
+            conn.request('POST', path, payload, {'Content-Type': 'application/json', 'Origin': 'http://foreign.invalid'})
+            response = conn.getresponse()
+            self.assertEqual(403, response.status)
+            response.read()
+            conn.close()
+            conn = HTTPConnection('127.0.0.1', server.server_port)
+            conn.request('POST', path, payload, {'Content-Type': 'application/json'})
+            response = conn.getresponse()
+            self.assertEqual(200, response.status)
+            body = json.loads(response.read())
+            self.assertEqual('prepared', body['quality_hook']['status'])
+            self.assertIn('quality_gate.py', body['quality_hook']['review_files'])
+            self.assertNotEqual(prepared['quality_hook']['path'], body['quality_hook']['path'])
+            conn.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(5)
+
+    def test_eval_recheck_blocks_failed_business_and_does_not_promote_rework(self):
+        self.ready()
+        self.call('execute')
+        state = self.wait()
+        workspace = Path(state['workspace'])
+        (workspace / 'check.py').write_text("import json,sys\nprint(json.dumps({'summary':"
+            "{'total':1,'passed':0,'blocking_failed':1,'observing_failed':0,'decision':'block'},"
+            "'results':[{'name':'value','level':'blocking','passed':False}]}))\nsys.exit(1)")
+        self.call('run_eval')
+        state = self.wait()
+        self.assertEqual('rework', state['stage'], state['error'])
+        self.assertEqual('rework', self.tasks.get(state['active_task_id'])['status'])
+        with self.assertRaises(ValueError):
+            self.call('accept', 'checked', actor='reviewer')
+
+    def test_invalid_recheck_preserves_error_instead_of_showing_previous_green(self):
+        self.ready()
+        self.call('execute')
+        state = self.wait()
+        (Path(state['workspace']) / 'check.py').write_text("print('not a JSON report')")
+        self.call('run_eval')
+        state = self.wait()
+        self.assertEqual('failed', state['stage'])
+        self.assertFalse(state['eval_harness']['available'])
+        self.assertTrue(state['eval_harness']['error'])
+        self.assertIn('error', state['eval_runs'][-1])
+
     def test_added_project_can_discuss_before_eval_configuration_but_cannot_confirm(self):
         project = self.registered[1]
         self.projects.configure(project['id'], [])

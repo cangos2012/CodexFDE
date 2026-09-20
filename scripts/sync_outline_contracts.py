@@ -90,7 +90,7 @@ def main() -> None:
     for relative in (Path("docs/courses"), Path("docs/courses/tasks")):
         directory = ROOT / relative
         paths = [path for path in sorted(directory.glob("L??-*.md")) if not path.name.endswith("-教师备课说明.md")]
-        paths.extend(path for number in range(1, 17) if (path := ROOT / f"docs/courses/L{number:02d}" / ("行动卡.md" if directory.name == "tasks" else "阅读讲义.md")).is_file())
+        paths.extend(path for number in range(1, 17) if (path := ROOT / f"docs/courses/L{number:02d}" / ("行动卡.md" if directory.name == "tasks" else "辅导资料.md")).is_file())
         for path in paths:
             match = re.fullmatch(r'L(\d{2})', path.parent.name) or re.match(r'L(\d{2})-', path.name)
             if not match:

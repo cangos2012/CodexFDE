@@ -4,9 +4,9 @@
 
 本讲用这个问题建设工作台的报告到修复任务映射器。人核对来源、确认目标与授权范围，Codex 调查并提出修改，工作台保存原失败与后续复验。
 
-Word 版：[阅读讲义](L09-阅读讲义.docx)与[实践操作手册](L09-实践操作手册.docx)，供下载阅读或导入飞书。
+配套资料：[辅导资料](辅导资料.md)、[实践操作手册](实践操作手册.md)，可按需查阅。
 
-先读[阅读讲义](阅读讲义.md)，再按[实践操作手册](实践操作手册.md)完成参考实验与自己的交付。配套[行动卡](行动卡.md)、[提交模板](SUBMISSION.md)、[三阶段提示词](prompts/README.md)与 [repair-task-review Skill](skills/repair-task-review/SKILL.md)。[完整课堂 PPT](slides/L09-把失败报告翻译成修复任务-图文案例版-30页.pptx)共 30 页，包含 7 个连续案例。
+先读[辅导资料](辅导资料.md)，再按[实践操作手册](实践操作手册.md)完成参考实验与自己的交付。配套[行动卡](行动卡.md)、[提交模板](SUBMISSION.md)、[三阶段提示词](prompts/README.md)与 [repair-task-review Skill](skills/repair-task-review/SKILL.md)。[完整课堂 PPT](slides/L09-把失败报告翻译成修复任务-图文案例版-30页.pptx)共 30 页，包含 7 个连续案例。
 
 [取消实验](examples/cancellation_lab.py)使用真实服务与临时库，验证其他订单保留、草稿、重复请求、已发货拒绝和中途回滚。leak 模式明确注入教学缺陷，并由真实 Harness 写出失败报告；[映射辅助程序](examples/map_report.py)可从该报告生成带来源的参考草案。以下实验用于理解当前实现边界，不能替代自己的产品修复。
 

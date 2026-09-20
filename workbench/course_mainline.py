@@ -11,6 +11,13 @@ from .spec import parse_spec
 
 
 COURSE_BUILD_THESIS = "用 Codex 搭建个人工作台；通过个人工作台组织人与 AI 协同开发 FlowERP"
+COURSE_WORKSPACE_BOUNDARY = (
+    "CodexFDE 是控制仓库，FlowERP 是独立客户项目。"
+    "L04+ 的 write_scope 是相对于本次隔离教学候选的路径上限，不是 CodexFDE 根目录权限。"
+    "flowerp/、web/ 的业务源码归属独立 FlowERP；workbench/、agent/ 归属工作台。"
+    "eval/、tests/ 须按具体文件和来源记录区分工程检查与客户业务检查。"
+    "当前课程候选仍组合两仓库源码，须记录来源与哈希；候选修改不自动写回任何源仓库。"
+)
 
 
 def _construction_stage(number: int) -> str:
@@ -69,6 +76,8 @@ class LessonContract:
         result["requirement_id"] = self.requirement_id
         result["course_build_thesis"] = COURSE_BUILD_THESIS
         result["construction_stage"] = _construction_stage(self.number)
+        result["workspace_boundary"] = COURSE_WORKSPACE_BOUNDARY
+        result["write_scope_base"] = "isolated_course_candidate" if self.number >= 4 else "learner_workbench"
         result.update(LESSON_STORY[self.number])
         return result
 
@@ -231,6 +240,7 @@ FDE 循环：{LESSON_STORY[number]['fde_loop']}。
 ## 约束
 
 - 允许写集：{scope}
+- 项目与路径归属：{COURSE_WORKSPACE_BOUNDARY}
 - 本讲复用 Eval：{evals}
 - 库存、订单、采购和任务状态必须遵守 `AGENTS.md` 的不可破坏规则。
 - 执行结果必须保存需求、Diff、命令、Eval 和人工决定之间的稳定引用。

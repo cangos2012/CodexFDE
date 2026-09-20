@@ -1,14 +1,14 @@
 {
-  "description": "FlowERP 在 Codex 准备结束一轮工作时复用统一阻断级 Harness。首次使用需在 /hooks 中审查并信任。",
+  "description": "当前工作台 Stop 质量检查；使用项目虚拟环境，首次或修改后在 /hooks 审查并信任。",
   "hooks": {
     "Stop": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/quality_gate.py\"",
-            "commandWindows": "powershell -NoProfile -Command \"$r = git rev-parse --show-toplevel; python (Join-Path $r '.codex/hooks/quality_gate.py')\"",
-            "statusMessage": "Running FlowERP blocking evals",
+            "command": "\"$(git rev-parse --show-toplevel)/.venv/bin/python\" -X utf8 \"$(git rev-parse --show-toplevel)/.codex/hooks/quality_gate.py\"",
+            "commandWindows": "powershell -NoProfile -Command \"$r = git rev-parse --show-toplevel; if ($LASTEXITCODE -ne 0) { exit 1 }; & (Join-Path $r '.venv/Scripts/python.exe') -X utf8 (Join-Path $r '.codex/hooks/quality_gate.py'); exit $LASTEXITCODE\"",
+            "statusMessage": "Running Workbench blocking evals",
             "timeout": 120
           }
         ]

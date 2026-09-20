@@ -2,8 +2,7 @@ from __future__ import annotations
 
 """Human-visible delivery pipeline stages shared by UI and LLM context.
 
-These stages describe one FlowERP *code delivery* task — not ERP business
-state machines (inventory / orders / purchase).
+These stages describe a code delivery task for its selected project.
 """
 
 # Ordered stages shown to humans and injected into model context.
@@ -28,16 +27,16 @@ PIPELINE_STAGES: tuple[dict, ...] = (
         "id": "code",
         "label": "改代码",
         "statuses": ("executing", "rework"),
-        "title": "正在改 FlowERP 代码",
-        "summary": "在 flowerp/tests 等范围内修改产品代码。",
-        "model_hint": "仅修改 write_scope；保持库存非负、入库幂等、订单状态机、采购审批。",
+        "title": "正在修改项目代码",
+        "summary": "在本次任务绑定的项目与允许文件范围内修改代码。",
+        "model_hint": "先核对任务项目与候选目录，仅修改 write_scope，遵守该项目业务规则。",
     },
     {
         "id": "eval",
         "label": "验收",
         "statuses": ("evaluating",),
         "title": "正在跑阻断级 Eval",
-        "summary": "用 Eval 验证 FlowERP 业务规则未被破坏。",
+        "summary": "在任务绑定的候选中运行 Eval，核对本次验收要求。",
         "model_hint": "根据失败用例定位修复；不得把失败伪装成成功。",
     },
     {
@@ -89,7 +88,7 @@ def pipeline_payload(task_status: str, *, detail: str = "", evidence: object = N
         summary = "员工已停工；测试可挑刺，需要老板/Leader 具名通过或驳回。"
     elif task_status == "completed":
         title = "交付已接受"
-        summary = "老板终审已通过，本次 FlowERP 增量完成。"
+        summary = "老板终审已通过，本次项目交付已接受。"
     elif task_status == "failed":
         title = "交付失败"
         summary = "本轮未能完成，需人工查看失败原因。"
@@ -128,7 +127,7 @@ def status_title(task_status: str | None) -> str:
     mapping = {
         "queued": "已接到需求",
         "spec_ready": "规格已写好",
-        "executing": "正在改 FlowERP 代码",
+        "executing": "正在修改项目代码",
         "evaluating": "正在跑阻断级 Eval",
         "rework": "需要返工",
         "review": "等老板终审",
@@ -160,7 +159,7 @@ def format_pipeline_for_llm(
     duty = duty_actor_for_stage((current or {}).get("id"), overrides=roster_overrides)
     nxt = next_duty_actor(status, overrides=roster_overrides)
     lines = [
-        "这是 FlowERP 代码交付流水线（不是库存/订单业务状态机）。",
+        "这是当前任务所属项目的代码交付流水线；项目和候选以本次任务记录为准。",
         "OPC：老板是超级个体；员工是 Agent（见下方班组）。",
         f"session: {session_id or '—'}",
         f"task: {task.get('id') or '—'}",

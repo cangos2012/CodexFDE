@@ -68,6 +68,18 @@ def main() -> int:
     spec_cmd.add_argument("path", nargs="?", default="FDE_SPEC.md")
     feedback_cmd = sub.add_parser("feedback", help="工作台：查看结构化反馈摘要")
     feedback_cmd.add_argument("--runtime-dir", default=".runtime")
+    subagent_plan_cmd = sub.add_parser("subagent-plan", help="工作台：校验并保存受控并行子任务计划")
+    subagent_plan_cmd.add_argument("manifest"); subagent_plan_cmd.add_argument("--runtime-dir", default=".runtime")
+    subagent_record_cmd = sub.add_parser("subagent-record", help="工作台：记录原生子任务活动和证据")
+    subagent_record_cmd.add_argument("plan_id"); subagent_record_cmd.add_argument("--name", required=True)
+    subagent_record_cmd.add_argument("--status", choices=("running", "completed", "failed"), required=True)
+    subagent_record_cmd.add_argument("--actor", required=True); subagent_record_cmd.add_argument("--evidence", action="append", default=[])
+    subagent_record_cmd.add_argument("--runtime-dir", default=".runtime")
+    subagent_finalize_cmd = sub.add_parser("subagent-finalize", help="工作台：核对子任务完成与真实并行后进入串行整合")
+    subagent_finalize_cmd.add_argument("plan_id"); subagent_finalize_cmd.add_argument("--actor", required=True)
+    subagent_finalize_cmd.add_argument("--runtime-dir", default=".runtime")
+    subagent_show_cmd = sub.add_parser("subagent-show", help="工作台：查看 SubAgent 计划与原始活动")
+    subagent_show_cmd.add_argument("plan_id"); subagent_show_cmd.add_argument("--runtime-dir", default=".runtime")
     course_contract_cmd = sub.add_parser("course-contract", help="查看某讲的可执行课程合同")
     course_contract_cmd.add_argument("--lesson", type=int, choices=range(1, 17))
     course_spec_cmd = sub.add_parser("course-spec", help="生成只包含本讲增量的交付 Spec")
@@ -200,6 +212,23 @@ def main() -> int:
         from .feedback import summary as feedback_summary
 
         print(json.dumps(feedback_summary(str(Path(args.runtime_dir) / "workbench.db")), ensure_ascii=False, indent=2))
+        return 0
+    if args.command.startswith("subagent-"):
+        from .subagent_coordination import SubagentCoordinator
+        coordinator = SubagentCoordinator(args.runtime_dir)
+        try:
+            if args.command == "subagent-plan":
+                result = coordinator.create(args.manifest)
+            elif args.command == "subagent-record":
+                result = coordinator.record(args.plan_id, args.name, args.status, args.actor, tuple(args.evidence))
+            elif args.command == "subagent-finalize":
+                result = coordinator.finalize(args.plan_id, args.actor)
+            else:
+                result = coordinator.get(args.plan_id)
+        except (ValueError, OSError, KeyError, json.JSONDecodeError) as error:
+            print(f"SubAgent 操作失败：{error}", file=sys.stderr)
+            return 1
+        print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     if args.command == "course-contract":
         result = lesson_contract(args.lesson).as_dict() if args.lesson else {

@@ -28,7 +28,7 @@ def schedule_titles() -> dict[int, str]:
 def lesson_files(directory: Path) -> dict[int, Path]:
     result: dict[int, Path] = {}
     for number in range(1, 17):
-        canonical = directory / f"L{number:02d}" / "阅读讲义.md"
+        canonical = directory / f"L{number:02d}" / "辅导资料.md"
         if directory.name == "tasks":
             canonical = directory.parent / f"L{number:02d}" / "行动卡.md"
         if canonical.is_file():
@@ -81,11 +81,11 @@ class CourseOutlineAlignmentTests(unittest.TestCase):
     def test_migration_alias_must_point_to_the_canonical_handout(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            canonical = root / 'L03/阅读讲义.md'
+            canonical = root / 'L03/辅导资料.md'
             canonical.parent.mkdir()
             canonical.write_text('# Current chapter', encoding='utf-8')
             alias = root / 'L03-旧入口.md'
-            alias.write_text('<!-- course-alias: L03/阅读讲义.md -->', encoding='utf-8')
+            alias.write_text('<!-- course-alias: L03/辅导资料.md -->', encoding='utf-8')
             self.assertEqual({3: canonical}, lesson_files(root))
             alias.write_text('<!-- course-alias: missing.md -->', encoding='utf-8')
             with self.assertRaisesRegex(AssertionError, '重复课程文件'):

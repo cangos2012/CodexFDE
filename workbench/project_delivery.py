@@ -28,13 +28,18 @@ def project_source_paths(root, runtime):
 
 
 class CandidateProjectEval:
-    def __init__(self, workspace, runtime, task_id, command, label):
+    def __init__(self, workspace, runtime, task_id, command, label, *, timeout=1800):
         self.workspace, self.runtime = Path(workspace), Path(runtime)
         self.task_id, self.command, self.label = task_id, command, label
+        self.timeout = timeout
 
     def __call__(self, suite='blocking', write_report=True):
         from .execution_control import checkpoint
+        from .daily_delivery import manifest
+        from .eval_harness import fingerprint, validate_project_report
+        import hashlib
         checkpoint()
+        before = manifest(self.workspace, self.runtime)
         folder = self.runtime / 'project-reports' / self.task_id / secrets.token_hex(12)
         folder.mkdir(parents=True)
         report_path = folder / 'report.json'
@@ -43,20 +48,23 @@ class CandidateProjectEval:
         from .execution import CodexExecutionRunner
         import time
         runner = CodexExecutionRunner(self.workspace, self.runtime)
-        result = runner._run_codex_streaming(command, '', 1800, lambda line: None, time.monotonic())
+        result = runner._run_codex_streaming(command, '', self.timeout, lambda line: None, time.monotonic())
         (folder / 'process.json').write_text(json.dumps({'command': command, 'cwd': str(self.workspace),
             'returncode': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr}, ensure_ascii=False), encoding='utf-8')
         checkpoint()
+        if result.returncode in {124, 127, 130}:
+            reason = {124: '项目 Eval 超时', 127: '项目 Eval 命令无法启动', 130: '项目 Eval 已取消'}[result.returncode]
+            raise RuntimeError(reason + '，未完成验证；进程记录：' + str(folder / 'process.json'))
         report = json.loads(report_path.read_text(encoding='utf-8') if report_path.exists() else result.stdout)
-        summary = report.get('summary', {})
-        if summary.get('decision') not in {'pass', 'block'}:
-            raise RuntimeError('项目 Eval 报告缺少 pass/block 决策')
-        if (result.returncode == 0) != (summary['decision'] == 'pass'):
-            raise RuntimeError('项目 Eval 退出码与报告结论不一致')
-        if summary['decision'] == 'pass' and (summary.get('blocking_failed', 0) or
-                any(r.get('level') == 'blocking' and r.get('passed') is not True for r in report.get('results', []))):
-            raise RuntimeError('项目 Eval 报告包含失败，不能声明通过')
+        # Preserve the exact received report even when validation rejects it.
+        (folder / 'raw-report.json').write_text(json.dumps(report, ensure_ascii=False), encoding='utf-8')
+        validate_project_report(report, result.returncode)
+        if before != manifest(self.workspace, self.runtime):
+            raise RuntimeError('项目 Eval 执行期间候选源码变化，结果不可用于验收')
         report['runner'] = {'workspace': str(self.workspace), 'process_returncode': result.returncode,
-                            'validated': True, 'label': self.label, 'report_path': str(report_path)}
+                            'validated': True, 'label': self.label, 'report_path': str(report_path),
+                            'candidate_sha256': fingerprint(before), 'command': command,
+                            'process_path': str(folder / 'process.json')}
         report_path.write_text(json.dumps(report, ensure_ascii=False), encoding='utf-8')
+        report['report_sha256'] = hashlib.sha256(report_path.read_bytes()).hexdigest()
         return report

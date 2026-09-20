@@ -65,9 +65,9 @@ const RAIL = [
     label: "改代码",
     role: "开发",
     match: ["executing", "rework"],
-    title: "③ 改 FlowERP 代码",
-    summary: "在 flowerp/tests 等范围内修改产品代码。",
-    model_hint: "仅改 write_scope；保持库存非负、入库幂等、订单状态机、采购审批。",
+    title: "③ 修改项目代码",
+    summary: "在本次任务绑定的项目与允许文件范围内修改代码。",
+    model_hint: "先核对任务项目与候选目录，仅改 write_scope，遵守该项目业务规则。",
     actions: ["受控改代码", "返工修复"],
   },
   {
@@ -76,7 +76,7 @@ const RAIL = [
     role: "测试",
     match: ["evaluating"],
     title: "④ 跑阻断级 Eval",
-    summary: "用 Eval 验证 FlowERP 业务规则未被破坏。",
+    summary: "在任务绑定的候选中运行 Eval，核对本次验收要求。",
     model_hint: "根据失败用例定位；不得把失败伪装成成功。",
     actions: ["blocking Eval", "收集失败证据"],
   },
@@ -93,13 +93,13 @@ const RAIL = [
 ];
 
 const STEP_HELP = {
-  queued: { title: "已接到需求", blurb: "FlowERP 改动请求已入队，准备生成任务 Spec。" },
+  queued: { title: "已接到需求", blurb: "项目改动请求已入队，准备生成任务 Spec。" },
   spec_ready: { title: "规格已写好", blurb: "自然语言已整理成任务 Spec，下一步改代码。" },
-  executing: { title: "正在改 FlowERP", blurb: "在 flowerp/tests 等写入范围内修改产品代码。" },
-  evaluating: { title: "正在跑验收", blurb: "阻断级 Eval 检查库存/订单/采购等规则是否被破坏。" },
+  executing: { title: "正在修改项目代码", blurb: "在本次任务绑定的项目与允许文件范围内修改代码。" },
+  evaluating: { title: "正在跑验收", blurb: "阻断级 Eval 检查本次任务的验收要求。" },
   review: { title: "等老板终审", blurb: "自动化已停工。测试意见可见；请老板/Leader 具名通过或驳回。" },
   rework: { title: "需要返工", blurb: "验收未过或被驳回，可再执行。" },
-  completed: { title: "交付已接受", blurb: "你已具名接受这次 FlowERP 增量。" },
+  completed: { title: "交付已接受", blurb: "你已具名接受这次项目交付。" },
   failed: { title: "交付失败", blurb: "本轮未完成，可看过程记录或复制会话再试。" },
   dead_letter: { title: "进入死信", blurb: "任务不可自动继续，需人工介入。" },
 };
