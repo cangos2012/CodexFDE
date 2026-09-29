@@ -1,7 +1,0 @@
-{
-  "red_exit": 1,
-  "green_exit": 0,
-  "same_checks": true,
-  "flow": "real failure -> reference mapper draft -> teacher completes task fields -> teacher restores single source branch -> same checks pass",
-  "boundary": "No Codex automatic repair, executor permission demonstration, remote run, or named acceptance."
-}

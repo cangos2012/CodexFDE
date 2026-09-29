@@ -241,6 +241,30 @@ function renderPipeline(detail) {
   document.querySelector('label[for="review-note"]').hidden = code !== "review";
 }
 
+function renderWorkflowGraph(graph) {
+  show('graph-version', graph.definition.id + ' · v' + graph.version);
+  show('graph-summary', '当前节点：' + graph.current + '　责任人：' + graph.owner +
+    (graph.waiting ? '　正在等待具名人工决定' : '') +
+    (graph.migrated ? '　· 旧任务按当前事实迁移，未补造历史边' : ''));
+  const nodes = document.getElementById('graph-nodes');
+  nodes.replaceChildren();
+  (graph.nodes || []).forEach(function(item) {
+    const node = document.createElement('div');
+    node.className = 'graph-node state-' + item.state;
+    const mark = item.state === 'current' ? '●' : item.state === 'visited' ? '✓' : '○';
+    node.textContent = mark + ' ' + item.id;
+    nodes.appendChild(node);
+  });
+  const events = document.getElementById('graph-events');
+  events.replaceChildren();
+  (graph.events || []).forEach(function(event) {
+    const row = document.createElement('li');
+    row.textContent = (event.from_node || '开始') + ' → ' + event.to_node + ' · ' +
+      event.actor + ' · ' + event.reason;
+    events.appendChild(row);
+  });
+}
+
 async function api(path, options) {
   const read = !options || !options.method || options.method.toUpperCase() === "GET";
   const controller = read ? new AbortController() : null;
@@ -614,9 +638,11 @@ async function loadDetail(taskId, polling) {
   if (!polling) clearEvidence("正在读取 " + taskId + " 的最新证据…");
   try {
     const detail = await api("/api/v1/delivery/views/" + encodeURIComponent(taskId));
+    const graph = detail.workflow_graph;
     if (version !== detailVersion) return;
     if (detail.task_id !== taskId || !detail.status || !detail.status.code) throw new Error("任务证据与请求不一致");
     renderEvidence(detail);
+    if (graph) renderWorkflowGraph(graph);
     const index = taskCache.findIndex(function (item) { return item.task_id === taskId; });
     if (index >= 0) { taskCache[index] = detail; renderTasks(taskCache, taskId); }
     const pendingCodeGate = detail.status.code === 'review' && detail.policy && detail.policy.execution_mode === 'codex' &&

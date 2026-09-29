@@ -1,2 +1,0 @@
-[PASS ] l12_teaching_approval                  170 ms  blank-reviewer: rejected; five tables unchanged
-{"total": 1, "passed": 1, "blocking_failed": 0, "observing_failed": 0, "decision": "pass"}

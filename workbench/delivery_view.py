@@ -295,9 +295,10 @@ def build_delivery_view(
 
 
 class DeliveryViewService:
-    def __init__(self, tasks: TaskStore, evolutions: EvolutionStore | None = None) -> None:
+    def __init__(self, tasks: TaskStore, evolutions: EvolutionStore | None = None, graphs=None) -> None:
         self.tasks = tasks
         self.evolutions = evolutions or EvolutionStore(tasks.path)
+        self.graphs = graphs
 
     def _related(self) -> tuple[list[dict], list[dict]]:
         feedback = feedback_summary(self.tasks.path)["items"]
@@ -306,19 +307,30 @@ class DeliveryViewService:
 
     def get(self, task_id: str) -> dict:
         feedback, evolutions = self._related()
-        return build_delivery_view(
+        view = build_delivery_view(
             self.tasks.get(task_id), feedback_items=feedback, evolution_items=evolutions,
         )
+        if self.graphs is not None:
+            self.graphs.ensure(task_id)
+            view["workflow_graph"] = self.graphs.view(task_id)
+            view["allowed_actions"] = list(dict.fromkeys(
+                list(view.get("allowed_actions") or []) + view["workflow_graph"]["allowed_actions"]))
+        return view
 
     def list(self, limit: int = 100) -> dict:
         feedback, evolutions = self._related()
-        views = [
-            build_delivery_view(
-                self.tasks.get(task["id"]), feedback_items=feedback,
-                evolution_items=evolutions, include_detail=False,
-            )
-            for task in self.tasks.list(limit)
-        ]
+        views = []
+        for task in self.tasks.list(limit):
+            view = build_delivery_view(self.tasks.get(task["id"]), feedback_items=feedback,
+                                       evolution_items=evolutions, include_detail=False)
+            if self.graphs is not None:
+                self.graphs.ensure(task["id"])
+                graph = self.graphs.view(task["id"])
+                view["workflow_graph"] = {key: graph[key] for key in
+                                          ("schema", "current", "version", "owner", "waiting", "allowed_actions")}
+                view["allowed_actions"] = list(dict.fromkeys(
+                    list(view.get("allowed_actions") or []) + graph["allowed_actions"]))
+            views.append(view)
         return {
             "schema": "workbench.delivery-view-list/v1",
             "summary": {

@@ -1,2 +1,0 @@
-[PASS ] l12_teaching_approval                  336 ms  approved: received; 17/2/15; one +7 receipt; OTHER and PR-OTHER preserved; teaching reviewer input is not authentication
-{"total": 1, "passed": 1, "blocking_failed": 0, "observing_failed": 0, "decision": "pass"}

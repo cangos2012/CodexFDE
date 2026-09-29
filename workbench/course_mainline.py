@@ -181,7 +181,7 @@ LESSONS: tuple[LessonContract, ...] = (
             refs=("REQUIREMENT:COURSE-L15",), scope=("workbench/", "flowerp/", "eval/", "tests/"),
             acceptance=("原始反馈先审核再进入记忆候选与执行合同。", "记忆来源、版本、状态、检索结果、采用快照和后续验证可追溯。", "撤回或跨项目记忆不进入默认上下文，反馈与检索结果均不能直接改写阻断裁判。"),
             evals=("delivery_evidence_and_review_controls", "raw_feedback_cannot_become_blocking"), dynamic_eval_required=True),
-    _lesson(16, "冷启动发布与工程答辩", "transfer", "冷启动、发布证据索引与迁移答辩", "现场交付此前未实现的小需求",
+    _lesson(16, "在新环境接手，并完成现场新需求", "transfer", "冷启动、发布证据索引与迁移答辩", "现场交付此前未实现的小需求",
             "现场抽取一个此前未实现的 FlowERP 小需求，使用工作台完成 Spec、受控执行、Eval、人审和发布证据。",
             refs=("REQUIREMENT:LIVE-DRAW",), scope=("flowerp/", "workbench/", "eval/", "web/", "tests/"),
             acceptance=("需求在答辩现场抽取且仓库基线中尚未实现。", "正常、失败和失败后不变状态均有新证据。", "发布索引能追溯需求、Diff、Eval、人审与剩余风险。"),

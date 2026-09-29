@@ -243,3 +243,27 @@ data/
 .tmp/
 *.pptx.inspect.ndjson
 ~$*.pptx
+
+# L13-L16 course materials stay local until publication is authorized
+/docs/courses/L1[3-6]*
+/docs/courses/l1[3-6]*
+/docs/courses/labs/L1[3-6]*
+/docs/courses/labs/l1[3-6]*
+/docs/courses/tasks/L1[3-6]*
+/docs/courses/tasks/l1[3-6]*
+/docs/courses/slides/L1[3-6]*
+/docs/courses/slides/l1[3-6]*
+/docs/courses/assets/L1[3-6]*
+/docs/courses/assets/l1[3-6]*
+/docs/courses/cases/L1[3-6]*
+/docs/courses/cases/l1[3-6]*
+/docs/reference/L1[3-6]*
+/docs/reference/l1[3-6]*
+
+# L09-L12 local experiment outputs; PowerPoint files remain ignored
+/docs/courses/L09/assets/latest/**/*.json
+/docs/courses/L1[0-2]/assets/latest/**/*.json
+/docs/courses/L09/assets/latest/**/*.txt
+/docs/courses/L1[0-2]/assets/latest/**/*.txt
+/docs/courses/L09/assets/latest/**/*.diff
+/docs/courses/L1[0-2]/assets/latest/**/*.diff

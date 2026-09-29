@@ -23,6 +23,7 @@ from .runtime_lease import WorkbenchRuntimeLease
 from .initiative import InitiativeStore
 from .candidate_preview import CandidatePreviews
 from .initiative_workflow import InitiativeWorkflow
+from .workflow_graph import WorkflowGraph, WorkflowConflict
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -45,6 +46,7 @@ class WorkbenchApp:
         self.port = port
         self.eval_factory = eval_factory
         self.tasks = TaskStore(self.runtime / "workbench.db")
+        self.graphs = WorkflowGraph(self.tasks)
         self.projects = ProjectStore(self.tasks.path)
         self.project_registration = ProjectRegistration(self.projects)
         existing = next((p for p in self.projects.list() if Path(p['root_path']) == ROOT), None)
@@ -59,7 +61,7 @@ class WorkbenchApp:
         # default applies to newly created initiatives only.
         self.default_project = (self.projects.default() or default)['id']
         self.evolutions = EvolutionStore(self.tasks.path)
-        self.views = DeliveryViewService(self.tasks, self.evolutions)
+        self.views = DeliveryViewService(self.tasks, self.evolutions, self.graphs)
         self.code = WebExecution(ROOT, self.runtime, self.tasks, enabled=enable_code_execution)
         self.previews = CandidatePreviews(self.runtime, self.tasks)
         self.initiative_workflow = InitiativeWorkflow(ROOT, self.runtime, self.initiatives, self.tasks,
@@ -249,6 +251,10 @@ def make_handler(app: WorkbenchApp):
                     limit = int((query.get("limit") or ["30"])[0])
                     return self._json(200, {"items": app.tasks.list(limit)})
                 if path.startswith("/api/v1/tasks/"):
+                    if path.endswith('/graph'):
+                        task_id = path.split('/')[-2]
+                        app.graphs.ensure(task_id)
+                        return self._json(200, app.graphs.view(task_id))
                     if '/artifacts/' in path:
                         import hashlib
                         parts = path.split('/')
@@ -300,6 +306,8 @@ def make_handler(app: WorkbenchApp):
                     return self._json(200, app.views.list(limit))
                 if path.startswith("/api/v1/delivery/views/"):
                     return self._json(200, app.views.get(path.rsplit("/", 1)[-1]))
+                if path == '/api/v1/workflow-handlers':
+                    return self._json(200, {'items': app.graphs.handlers()})
                 relative = "index.html" if path == "/" else path.lstrip("/")
                 file_path = (WEB_ROOT / relative).resolve()
                 if WEB_ROOT not in file_path.parents and file_path != WEB_ROOT:
@@ -456,6 +464,31 @@ def make_handler(app: WorkbenchApp):
                         body.get('business_refs'),
                     ))
                 parts = [item for item in path.split("/") if item]
+                if parts[:3] == ["api", "v1", "tasks"] and len(parts) == 6 and parts[4] == 'graph':
+                    task_id, action = parts[3], parts[5]
+                    key = self.headers.get('Idempotency-Key', '')
+                    common = {"actor": str(body.get("actor", "")),
+                              "expected_version": int(body.get("expected_version", 0)), "key": key}
+                    if action == 'advance':
+                        return self._json(200, app.graphs.advance(task_id, **common))
+                    if action == 'authorize':
+                        return self._json(200, app.graphs.authorize(
+                            task_id, candidate_sha256=str(body.get('candidate_sha256', '')), **common))
+                    if action == 'decisions':
+                        return self._json(200, app.graphs.decide(
+                            task_id, decision_type=str(body.get('decision_type', '')),
+                            decision=str(body.get('decision', '')), role=str(body.get('role', '')),
+                            reason=str(body.get('reason', '')),
+                            candidate_revision=int(body.get('candidate_revision', 0)),
+                            candidate_sha256=str(body.get('candidate_sha256', '')),
+                            target_ref=str(body.get('target_ref', '')), **common))
+                    if action == 'recover':
+                        return self._json(200, app.graphs.recover(
+                            task_id, reason=str(body.get('reason', '')), **common))
+                    if action == 'reconcile':
+                        return self._json(200, app.graphs.reconcile(
+                            task_id, evidence=body.get('evidence') if isinstance(body.get('evidence'), dict) else {},
+                            **common))
                 if parts[:3] == ["api", "v1", "tasks"] and len(parts) == 5:
                     task_id, action = parts[3], parts[4]
                     if action == 'preview':
@@ -478,7 +511,7 @@ def make_handler(app: WorkbenchApp):
                             str(body.get("note", "")),
                         ))
                 return self._json(404, {"error": "not_found"})
-            except TaskSubmissionConflict as exc:
+            except (TaskSubmissionConflict, WorkflowConflict) as exc:
                 self._json(409, {"error": "conflict", "message": str(exc)})
             except json.JSONDecodeError:
                 self._json(400, {"error": "invalid_json", "message": "请求体不是合法 JSON"})
