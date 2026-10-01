@@ -501,6 +501,8 @@ harness-workbench plugin-events
 .\.venv\Scripts\python.exe -X utf8 -c "import workbench, eval; print('imports-ok')"
 ```
 
+安装日志中的 `flowerp-fde-camp` 是 `pip` 使用的安装项目名，Python 导入的是实际代码包 `workbench`、`eval` 等。FlowERP 的 `flowerp` 包属于独立客户仓库；旧命令中的 `import workbench, eval, flowerp` 应改为上方命令。不要改成 `import flowerp-fde-camp`，也不要为此重命名目录或向工作台环境安装客户包。看到 `imports-ok` 且退出码为 `0`，才表示这项自检通过。
+
 已激活本仓库 `.venv` 时也可使用 `python`。若提示模块不存在，先在本仓库运行 `.\.venv\Scripts\python.exe -m pip install -e .`，再执行 `environment-check`。
 
 ### `flowerp-workbench` 或 `harness-workbench` 找不到
