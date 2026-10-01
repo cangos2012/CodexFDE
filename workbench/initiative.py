@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import sqlite3
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
+
+from .maintenance import runtime_write_guard
 
 
 DECISIONS = frozenset({"build", "experiment", "defer", "reject", "stop"})
@@ -19,6 +22,10 @@ STRICT_AREAS = frozenset({
 STANDARD_AREAS = frozenset({
     "order", "purchase", "api", "schema", "migration", "cross_team", "deployment",
 })
+
+
+class InitiativeSubmissionConflict(ValueError):
+    """An initiative submission key was already used for a different request."""
 
 
 def _text(value: object) -> str:
@@ -160,6 +167,15 @@ class InitiativeStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_initiative_events
                   ON initiative_events(initiative_id, sequence);
+                CREATE TABLE IF NOT EXISTS initiative_submissions(
+                  submission_key TEXT PRIMARY KEY,
+                  fingerprint TEXT NOT NULL,
+                  initiative_id TEXT NOT NULL REFERENCES initiatives(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_initiatives_updated
+                  ON initiatives(updated_at DESC,id DESC);
+                CREATE INDEX IF NOT EXISTS idx_initiatives_project_updated
+                  ON initiatives(project_id,updated_at DESC,id DESC);
                 """
             )
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(initiatives)")}
@@ -172,16 +188,17 @@ class InitiativeStore:
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.path, timeout=15)
-        conn.row_factory = sqlite3.Row
-        try:
-            yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        with runtime_write_guard(self.path):
+            conn = sqlite3.connect(self.path, timeout=15)
+            conn.row_factory = sqlite3.Row
+            try:
+                yield conn
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
 
     def set_home_hidden(self, initiative_id: str, hidden: bool, actor: str, version: int) -> dict:
         if not _text(actor) or actor.startswith('agent:'):
@@ -196,7 +213,7 @@ class InitiativeStore:
                          actor, {'home_hidden': hidden})
         return self.get(initiative_id)
 
-    def create(self, data: dict, actor: str) -> dict:
+    def create(self, data: dict, actor: str, submission_key: str | None = None) -> dict:
         _reject_lossy_text(data)
         title = _text(data.get("title"))
         raw_signal = _text(data.get("raw_signal"))
@@ -231,7 +248,23 @@ class InitiativeStore:
             _text(data.get("project_id")), _text(data.get("requirement_id")),
             _text(data.get("success_metric")), _text(data.get("stop_condition")),
         )
+        fingerprint = hashlib.sha256(json.dumps(
+            {"data": data, "actor": actor}, ensure_ascii=False, sort_keys=True,
+            separators=(",", ":"), allow_nan=False,
+        ).encode("utf-8")).hexdigest()
+        if submission_key is not None:
+            if not isinstance(submission_key, str) or not submission_key.strip() or len(submission_key) > 200:
+                raise ValueError("提交键不能为空且不能超过 200 字符")
         with self.connect() as conn:
+            if submission_key is not None:
+                conn.execute("BEGIN IMMEDIATE")
+                previous = conn.execute(
+                    "SELECT * FROM initiative_submissions WHERE submission_key=?", (submission_key,),
+                ).fetchone()
+                if previous:
+                    if previous["fingerprint"] != fingerprint:
+                        raise InitiativeSubmissionConflict("提交键已用于不同事项；请使用新键")
+                    return self.get(previous["initiative_id"])
             conn.execute(
                 "INSERT INTO initiatives("
                 "id,title,raw_signal,source,problem_statement,goal,non_goals_json,constraints_json,"
@@ -244,6 +277,9 @@ class InitiativeStore:
                 "source": source, "risk_lane": lane, "risk_reasons": risk_reasons,
                 "evidence_count": len(evidence),
             })
+            if submission_key is not None:
+                conn.execute("INSERT INTO initiative_submissions VALUES(?,?,?)",
+                             (submission_key, fingerprint, initiative_id))
         return self.get(initiative_id)
 
     @staticmethod
@@ -333,6 +369,11 @@ class InitiativeStore:
                 "SELECT * FROM initiatives ORDER BY updated_at DESC,id DESC LIMIT ?", (limit,),
             ).fetchall()
         return [self._project(self._decode(row)) for row in rows]
+
+    def query(self, **filters) -> dict:
+        """Paginated list projection; old ``list()`` callers remain compatible."""
+        from .initiative_home import InitiativeHome
+        return InitiativeHome(self.path).page(home=False, **filters)
 
     def revise(self, initiative_id: str, changes: dict, actor: str,
                expected_version: int) -> dict:

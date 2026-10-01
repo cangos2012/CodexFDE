@@ -15,10 +15,12 @@ function setup() {
   const document = {createElement:element, getElementById(id) {
     if(!nodes.has(id)) nodes.set(id,element('div'));return nodes.get(id);
   }, querySelectorAll() {return [];}, querySelector(selector) {return this.getElementById(selector);}};
-  const context=vm.createContext({document,Date});
+  const intervals=[];
+  const context=vm.createContext({document,Date,URLSearchParams,setTimeout,clearTimeout,
+    setInterval:callback=>{intervals.push(callback);return intervals.length;}});
   for(const name of ['workspace-dashboard.js','initiative_workflow.js'])
     vm.runInContext(fs.readFileSync(path.join(__dirname,'../workbench_web',name),'utf8'),context);
-  return {context,node:id=>document.getElementById(id)};
+  return {context,node:id=>document.getElementById(id),document,intervals};
 }
 function workflow(stage) {
   return {id:'I1',stage,enabled:true,messages:[],iterations:[],documents:[],progress:[],
@@ -141,4 +143,83 @@ test('candidate inspection uses a top-level link without a blocked cross-origin 
   assert.equal(node('iw-preview-link').hidden,false);
   assert.equal(node('iw-preview-link').href,'http://127.0.0.1:51053/');
   assert.match(node('iw-preview-status').textContent,/独立窗口/);
+});
+
+function summary(ids, extra={}) {
+  return {items:ids.map(id=>({item:{id,title:id,project_id:'P1',home_hidden:0,version:1},
+    work:{stage:'clarifying',project:{name:'甲项目'},proposal:{goal:'保存目标'}}})),
+    counts:{attention:121,running:3,outcome:2,unknown:0},total:121,matching_total:126,
+    next_cursor:null,projects:[{id:'P1',name:'甲项目'},{id:'P2',name:'乙项目'}],
+    outcomes:{released:2,observed:1},has_mock:true,...extra};
+}
+
+test('home fetches one summary endpoint with server filters and renders full match counts',async()=>{
+  const {context,node}=setup();
+  context.show=(id,value)=>{node(id).textContent=value;};
+  node('home-project').value='P1';node('home-search').value='中文%需求';
+  node('home-include-cleared').checked=true;
+  const urls=[];
+  context.api=async url=>{urls.push(url);return summary(['new']);};
+  await context.refreshProjectHome(true);
+  assert.equal(urls.length,1);
+  const params=new URLSearchParams(urls[0].split('?')[1]);
+  assert.equal(urls[0].split('?')[0],'/api/v1/initiatives/home');
+  assert.equal(params.get('project_id'),'P1');assert.equal(params.get('group'),'attention');
+  assert.equal(params.get('q'),'中文%需求');assert.equal(params.get('include_hidden'),'true');
+  assert.equal(params.get('limit'),'20');
+  assert.equal(node('home-attention').textContent,121);
+  assert.equal(node('home-running').textContent,3);
+  assert.match(node('home-page-status').textContent,/1 \/ 121/);
+  assert.equal(node('home-load-more').hidden,true);
+});
+
+test('load more appends a page and polling preserves expansion without per-item reads',async()=>{
+  const {context,node}=setup();context.show=(id,value)=>{node(id).textContent=value;};
+  node('home-project').value='all';
+  const urls=[];
+  context.api=async url=>{
+    urls.push(url);
+    return url.includes('cursor=') ? summary(['new','older']) : summary(['new'],{next_cursor:'cursor-1'});
+  };
+  await context.refreshProjectHome(true);
+  assert.equal(node('home-load-more').hidden,false);
+  await context.loadMoreProjectHome();
+  assert.equal(node('home-items').children.length,2);
+  assert.equal(node('home-attention').textContent,121);
+  assert.equal(node('home-load-more').hidden,true);
+  assert.match(urls[1],/cursor=cursor-1/);
+  await context.refreshProjectHome();
+  assert.equal(node('home-items').children.length,2);
+  assert.equal(urls.length,4);
+  assert.equal(urls.every(url=>url.startsWith('/api/v1/initiatives/home?')),true);
+  await context.refreshProjectHome(true);
+  assert.equal(node('home-items').children.length,1);
+  assert.equal(vm.runInContext('homePages',context),1);
+});
+
+test('late responses and errors cannot replace a newer filter result',async()=>{
+  const {context,node}=setup();context.show=(id,value)=>{node(id).textContent=value;};
+  node('home-project').value='P1';
+  const pending=[];
+  context.api=url=>new Promise((resolve,reject)=>pending.push({url,resolve,reject}));
+  const old=context.refreshProjectHome(true);
+  node('home-project').value='P2';
+  const current=context.refreshProjectHome(true);
+  pending[1].resolve(summary(['current'],{counts:{attention:2,running:0,outcome:0,unknown:0}}));
+  await current;
+  pending[0].reject(new Error('old failure'));
+  await old;
+  assert.equal(node('home-attention').textContent,2);
+  assert.equal(vm.runInContext('homeRows[0].item.id',context),'current');
+  assert.doesNotMatch(node('home-status').textContent,/old failure/);
+});
+
+test('home polling pauses when document or overview is hidden',async()=>{
+  const {context,node,document,intervals}=setup();
+  let refreshes=0;context.refreshProjectHome=async()=>{refreshes++;};
+  context.initProjectHome();
+  assert.equal(refreshes,1);assert.equal(intervals.length,1);
+  document.hidden=true;intervals[0]();assert.equal(refreshes,1);
+  document.hidden=false;node('view-overview').hidden=true;intervals[0]();assert.equal(refreshes,1);
+  node('view-overview').hidden=false;intervals[0]();assert.equal(refreshes,2);
 });

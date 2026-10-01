@@ -124,6 +124,18 @@ class DeliveryAutomation:
         return self.store.get(task_id)
 
     def _execute(self, task_id: str, actor: str) -> None:
+        from contextlib import ExitStack
+        from .maintenance import MaintenanceBusy, MaintenanceGate
+        with ExitStack() as ownership:
+            while True:
+                try:
+                    ownership.enter_context(MaintenanceGate(self.runtime_dir).write())
+                    break
+                except MaintenanceBusy:
+                    time.sleep(.05)
+            self._execute_owned(task_id, actor)
+
+    def _execute_owned(self, task_id: str, actor: str) -> None:
         retry = False
         attempts = 1
         try:

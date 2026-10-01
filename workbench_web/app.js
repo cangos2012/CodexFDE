@@ -306,7 +306,6 @@ function actorName() {
     throw new Error(!name ? '请先填写你的姓名或课堂昵称，再开始交付。' :
       name.length > 80 ? '署名请控制在 80 个字以内。' : '不能使用 agent: 开头的执行器署名，请填写你的姓名或课堂昵称。');
   }
-  try { localStorage.setItem('workbench-actor', name); } catch (_) { /* Browsing without storage remains usable. */ }
   show('identity-status', '已使用你的署名：' + name + '。决定会与证据一起保存。');
   return name;
 }
@@ -757,8 +756,8 @@ async function boot() {
   try { document.getElementById('execution-recovery').hidden = !localStorage.getItem('workbench-pending-plan'); } catch (_) { /* Storage is optional. */ }
   document.getElementById('resume-execution').onclick = resumeExecution;
   const identity = document.getElementById('task-actor');
-  try { identity.value = localStorage.getItem('workbench-actor') || ''; } catch (_) { /* Storage is optional. */ }
-  if (identity.value.trim()) show('identity-status', '当前署名：' + identity.value.trim() + '。确认与验收会记录此署名。');
+  identity.value = '';
+  try { localStorage.removeItem('workbench-actor'); } catch (_) { /* Storage is optional. */ }
   identity.addEventListener('change', function() {
     try { localStorage.removeItem('workbench-actor'); } catch (_) { /* Storage is optional. */ }
     try { actorName(); } catch(error) { show('identity-status', error.message); }
@@ -810,6 +809,12 @@ async function boot() {
   };
   try {
     const health = await api("/api/health");
+    if(typeof WorkbenchDrafts!=='undefined') {
+      WorkbenchDrafts.init(health.runtime_instance || health.runtime);
+      document.getElementById('clear-local-drafts').onclick=()=>WorkbenchDrafts.clearAll();
+      if(typeof trackInitiativeDraft==='function')trackInitiativeDraft(currentInitiative);
+    }
+    if(typeof initWorkbenchBackups==='function')initWorkbenchBackups();
     const capabilities = await api('/api/v1/delivery/capabilities');
     const readiness = capabilities.code_readiness;
     webCodeAvailable = !!capabilities.web_code_execution && (!readiness || readiness.ready === true);

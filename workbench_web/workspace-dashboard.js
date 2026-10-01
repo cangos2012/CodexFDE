@@ -15,6 +15,8 @@ const deliveryStageViews = {
   rework: ['需要返工', '检查未通过，需要修订', '查看失败证据，在这里给出修改意见，继续同一项交付。', 'attention', 3, 'action'],
   review: ['等你验收', '检查已结束，请核对实际成果', '检查通过不等于需求完成。对照验收条件看候选，由指定负责人决定是否接受。', 'attention', 4, 'result'],
   accepted: ['等待集成', '候选已接受，确认是否集成', '工作台会再次核对源码基线并保留备份；集成不会自动发布。', 'attention', 4, 'result'],
+  completed: ['已验收', '查看已验收候选与后续交付', '人工验收已登记；项目集成、实际发布和效果仍需分别核对。', 'attention', 4, 'result'],
+  dead_letter: ['需要处理', '任务已停止重试，请查看失败记录', '保留失败证据，明确下一步处理方式后再发起新任务。', 'attention', 0, 'result'],
   integrating: ['集成中', '正在将已验收改动集成到项目', '正在核对基线并写入已验收改动。请等待结果。', 'running', 4, 'action'],
   integrated: ['已集成', '代码已集成，还需要实际发布', '人工完成发布后，在这里登记版本、环境与证据。', 'outcome', 5, 'result'],
   released: ['效果待观察', '已经发布，等待真实使用结果', '记录观察周期、实际指标与用户反馈，判断这次交付是否解决了原问题。', 'outcome', 5, 'result'],
@@ -29,7 +31,7 @@ function uiElement(tag, className, text) {
   const el=document.createElement(tag); if(className)el.className=className;
   if(text!==undefined)el.textContent=text; return el;
 }
-let homeRows=[], homeFilter='attention', homeRead=0;
+let homeRows=[], homeFilter='attention', homeRead=0, homeSummary=null, homePages=1, homeSearchTimer=null;
 const homeClearNotices=new Map();
 async function setHomeCleared(row, button, notice) {
   if(button.disabled)return;
@@ -60,15 +62,16 @@ function renderProjectHome() {
   const cleared=document.getElementById('home-include-cleared').checked;
   const rows=homeRows.filter(row=>(selected==='all' || row.item.project_id===selected) && (include || !isDemoInitiative(row.item)) && (cleared || !row.item.home_hidden || row.view.group==='running'));
   ['attention','running','outcome'].forEach(group=>{
-    show('home-'+group,rows.filter(row=>row.view.group===group).length);
+    show('home-'+group,homeSummary ? homeSummary.counts[group] : rows.filter(row=>row.view.group===group).length);
     document.querySelector('[data-home-filter="'+group+'"]').classList.toggle('selected',homeFilter===group);
   });
-  show('home-mock-note',homeRows.some(row=>isDemoInitiative(row.item)) ? '课程演示单独标识，不作为真实交付成果。' : '只根据已保存的事项和执行记录展示进展。');
-  const failed=rows.filter(row=>row.view.group==='unknown').length;
-  show('home-status',failed ? failed+' 项进展暂不可读，请刷新重试。' : rows.length+' 项'+(include?'事项（含演示）':'真实事项')+' · 点击卡片继续，不必重新解释背景');
+  show('home-mock-note',(homeSummary ? homeSummary.has_mock : homeRows.some(row=>isDemoInitiative(row.item))) ? '课程演示单独标识，不作为真实交付成果。' : '只根据已保存的事项和执行记录展示进展。');
+  const failed=homeSummary ? homeSummary.counts.unknown : rows.filter(row=>row.view.group==='unknown').length;
+  const total=homeSummary ? homeSummary.matching_total : rows.length;
+  show('home-status',failed ? failed+' 项进展暂不可读，请刷新重试。' : total+' 项'+(include?'事项（含演示）':'真实事项')+' · 点击卡片继续，不必重新解释背景');
   show('home-list-title',({attention:'下一步，等你来定',running:'正在后台推进',outcome:'交付之后，核对效果',all:'所有交付事项'})[homeFilter]);
   const list=document.getElementById('home-items');list.replaceChildren();
-  const visible=rows.filter(row=>(cleared && row.item.home_hidden) || homeFilter==='all' || row.view.group===homeFilter || row.view.group==='unknown');
+  const visible=homeSummary ? rows : rows.filter(row=>(cleared && row.item.home_hidden) || homeFilter==='all' || row.view.group===homeFilter || row.view.group==='unknown');
   for(const row of visible) {
     const {item,work,view}=row;
     const card=uiElement('article','initiative-card '+view.group);
@@ -94,33 +97,72 @@ function renderProjectHome() {
       uiElement('p','',homeFilter==='outcome'?'实际集成、发布和效果回收后，记录会出现在这里。':'从一个真实问题开始，工作台会把进展和需要你决定的事带回这里。'));
     const button=uiElement('button','secondary','新建交付事项');button.onclick=()=>document.getElementById('new-task').click();empty.append(button);list.append(empty);
   }
-  const released=rows.filter(r=>!isDemoInitiative(r.item) && r.work?.current_release).length;
-  const observed=rows.filter(r=>!isDemoInitiative(r.item) && r.work?.stage==='observed').length;
+  const released=homeSummary ? homeSummary.outcomes.released : rows.filter(r=>!isDemoInitiative(r.item) && r.work?.current_release).length;
+  const observed=homeSummary ? homeSummary.outcomes.observed : rows.filter(r=>!isDemoInitiative(r.item) && r.work?.stage==='observed').length;
   show('home-outcome-note',released ? released+' 项登记了实际发布，其中 '+observed+' 项已回收效果。' : '目前尚无真实发布记录。测试通过之后，还要核对需求是否真正得到解决。');
+  const more=document.getElementById('home-load-more');
+  if(more){more.hidden=!homeSummary?.next_cursor;more.disabled=false;}
+  const pageStatus=document.getElementById('home-page-status');
+  if(pageStatus)pageStatus.textContent=homeSummary ? '已显示 '+visible.length+' / '+homeSummary.total+' 项当前状态事项' : '';
 }
-async function refreshProjectHome() {
+function homeQuery(cursor='') {
+  const query=new URLSearchParams({project_id:document.getElementById('home-project').value || 'all',
+    group:homeFilter,q:document.getElementById('home-search')?.value.trim() || '',
+    include_mock:String(!!document.getElementById('home-include-mock').checked),
+    include_hidden:String(!!document.getElementById('home-include-cleared').checked),limit:'20'});
+  if(cursor)query.set('cursor',cursor);
+  return '/api/v1/initiatives/home?'+query.toString();
+}
+async function refreshProjectHome(reset=false) {
+  if(reset){homePages=1;homeSummary=null;homeRows=[];}
   const version=++homeRead;
+  const more=document.getElementById('home-load-more');if(more)more.disabled=true;
   try {
-    const [body,projects]=await Promise.all([api('/api/v1/initiatives'),api('/api/v1/projects')]);
+    let body=await api(homeQuery()),items=[...body.items];
+    // Preserve an expanded list across polling, using pages instead of per-card
+    // detail reads. Filtering always resets to a single page.
+    for(let page=1;page<homePages && body.next_cursor;page++) {
+      if(version!==homeRead)return;
+      body=await api(homeQuery(body.next_cursor));items.push(...body.items);
+    }
+    if(version!==homeRead)return;
     const select=document.getElementById('home-project'),selected=select.value;
     const option=uiElement('option','','全部项目');option.value='all';select.replaceChildren(option);
-    projects.items.forEach(p=>{const o=uiElement('option','',p.name);o.value=p.id;select.append(o);});
-    select.value=projects.items.some(p=>p.id===selected)?selected:'all';
-    const rows=await Promise.all(body.items.map(async item=>{
-      try {const work=await api('/api/v1/initiatives/'+item.id+'/workflow');return {item,work,view:deliveryStageView(work.stage)};}
-      catch(_){return {item,work:null,view:deliveryStageView('unavailable')};}
-    }));
+    body.projects.forEach(p=>{const o=uiElement('option','',p.name);o.value=p.id;select.append(o);});
+    select.value=body.projects.some(p=>p.id===selected)?selected:'all';
+    if(select.value!==selected && selected!=='all')return refreshProjectHome(true);
+    const unique=new Map();for(const row of items)if(!unique.has(row.item.id))unique.set(row.item.id,row);
+    homeSummary=body;homeRows=[...unique.values()].map(row=>({...row,view:deliveryStageView(row.work.stage)}));renderProjectHome();
+  } catch(error) {
     if(version!==homeRead)return;
-    homeRows=rows;renderProjectHome();
-  } catch(error) { show('home-status','暂时无法读取项目交付：'+error.message);['attention','running','outcome'].forEach(k=>show('home-'+k,'—')); }
+    show('home-status','暂时无法读取项目交付：'+error.message);['attention','running','outcome'].forEach(k=>show('home-'+k,'—'));
+  } finally {if(version===homeRead && more)more.disabled=false;}
+}
+async function loadMoreProjectHome() {
+  if(!homeSummary?.next_cursor)return;
+  const button=document.getElementById('home-load-more');
+  if(button?.disabled)return;
+  if(button)button.disabled=true;
+  const version=++homeRead;
+  try {
+    const body=await api(homeQuery(homeSummary.next_cursor));
+    if(version!==homeRead)return;
+    const present=new Set(homeRows.map(row=>row.item.id));
+    homeRows.push(...body.items.filter(row=>!present.has(row.item.id)).map(row=>({...row,view:deliveryStageView(row.work.stage)})));
+    homeSummary=body;homePages++;renderProjectHome();
+  } catch(error) {if(version===homeRead)show('home-status','无法加载下一页：'+error.message);}
+  finally {if(version===homeRead && button)button.disabled=false;}
 }
 function initProjectHome() {
-  document.querySelectorAll('[data-home-filter]').forEach(b=>b.onclick=()=>{homeFilter=b.dataset.homeFilter;renderProjectHome();});
-  document.getElementById('home-project').onchange=renderProjectHome;
-  document.getElementById('home-include-mock').onchange=renderProjectHome;
-  document.getElementById('home-include-cleared').onchange=renderProjectHome;
-  document.getElementById('home-all').onclick=()=>{homeFilter='all';renderProjectHome();};
-  document.getElementById('home-show-outcomes').onclick=()=>{homeFilter='outcome';renderProjectHome();};
+  document.querySelectorAll('[data-home-filter]').forEach(b=>b.onclick=()=>{homeFilter=b.dataset.homeFilter;refreshProjectHome(true);});
+  document.getElementById('home-project').onchange=()=>refreshProjectHome(true);
+  document.getElementById('home-include-mock').onchange=()=>refreshProjectHome(true);
+  document.getElementById('home-include-cleared').onchange=()=>refreshProjectHome(true);
+  const search=document.getElementById('home-search');
+  if(search)search.oninput=()=>{++homeRead;clearTimeout(homeSearchTimer);homeSearchTimer=setTimeout(()=>refreshProjectHome(true),300);};
+  const more=document.getElementById('home-load-more');if(more)more.onclick=loadMoreProjectHome;
+  document.getElementById('home-all').onclick=()=>{homeFilter='all';refreshProjectHome(true);};
+  document.getElementById('home-show-outcomes').onclick=()=>{homeFilter='outcome';refreshProjectHome(true);};
   document.getElementById('back-to-initiatives').onclick=()=>{
     if(initiativeDirty){show('initiative-status','请先保存当前修改。');return;}
     document.getElementById('view-decision').classList.remove('item-open');

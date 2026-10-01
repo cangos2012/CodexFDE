@@ -21,6 +21,10 @@ from .workflow import run_task
 from .web_execution import WebExecution
 from .runtime_lease import WorkbenchRuntimeLease
 from .initiative import InitiativeStore
+from .initiative import InitiativeSubmissionConflict
+from .initiative_home import InitiativeHome
+from .maintenance import MaintenanceGate, MaintenanceBusy
+from .workbench_backup import BackupService, RESTORE_MARKER
 from .candidate_preview import CandidatePreviews
 from .initiative_workflow import InitiativeWorkflow
 from .workflow_graph import WorkflowGraph, WorkflowConflict
@@ -42,10 +46,16 @@ class WorkbenchApp:
             raise ValueError('客户项目地址必须是独立的本机 HTTP 服务地址')
         self.erp_url = erp_url.rstrip('/')
         self.runtime = Path(runtime_dir).resolve()
+        if (self.runtime / 'workbench-restore-failed.json').exists():
+            raise ValueError('工作台恢复尚未完成。请保留失败目录和备份，校验后重新恢复到空的原路径，再启动服务。')
         self.runtime.mkdir(parents=True, exist_ok=True)
         self.port = port
         self.eval_factory = eval_factory
         self.tasks = TaskStore(self.runtime / "workbench.db")
+        with self.tasks.connect() as db:
+            db.execute('CREATE TABLE IF NOT EXISTS workbench_instance (singleton INTEGER PRIMARY KEY CHECK(singleton=1), id TEXT NOT NULL)')
+            db.execute('INSERT OR IGNORE INTO workbench_instance(singleton,id) VALUES(1,?)', (uuid.uuid4().hex,))
+            self.runtime_instance = db.execute('SELECT id FROM workbench_instance WHERE singleton=1').fetchone()['id']
         self.graphs = WorkflowGraph(self.tasks)
         self.projects = ProjectStore(self.tasks.path)
         self.project_registration = ProjectRegistration(self.projects)
@@ -55,6 +65,8 @@ class WorkbenchApp:
              '-X', 'utf8', '-m', 'eval.harness', '--suite', 'blocking', '--report-path', '{report_path}'],
             project_id='PROJECT-FLOWERP')
         self.initiatives = InitiativeStore(self.tasks.path)
+        self.initiative_home = InitiativeHome(self.tasks.path)
+        self.backups = BackupService(self.runtime)
         with self.initiatives.connect() as db:
             db.execute("UPDATE initiatives SET project_id=? WHERE project_id IN ('', 'FlowERP')", (default['id'],))
         # Old unbound records belong to the original course checkout. A new
@@ -82,6 +94,8 @@ class WorkbenchApp:
             "workbench_port": self.port,
             "erp_url": self.erp_url,
             "runtime": str(self.runtime),
+            "runtime_instance": self.runtime_instance,
+            "restored": (self.runtime / RESTORE_MARKER).is_file(),
             "database": str(self.runtime / "workbench.db"),
             "erp_database": None,
             "message": f"这是个人研发工作台。FlowERP 是客户项目案例，请在 {self.erp_url} 打开。",
@@ -91,6 +105,17 @@ class WorkbenchApp:
                 "codex": "Codex 是底座，既造工作台也被工作台约束",
             },
         }
+
+    def backup_busy(self):
+        with self.initiative_workflow.lock:
+            workflow_busy = any(t.is_alive() for t in self.initiative_workflow.workers.values())
+        with self.automation._lock:
+            automation_busy = bool(self.automation._pending) or any(t.is_alive() for t in self.automation._threads.values())
+        with self.code.lock:
+            code_busy = any(plan['state'] == 'starting' for plan in self.code.plans.values())
+        with self.previews.lock:
+            preview_busy = any(p.poll() is None for p, _, _ in self.previews.running.values())
+        return workflow_busy or automation_busy or code_busy or preview_busy
 
     def course_current(self, lesson: int | None = None) -> dict:
         return current_course(lesson, tasks=self.tasks.list(50))
@@ -206,6 +231,17 @@ def make_handler(app: WorkbenchApp):
         server_version = "Workbench/0.1"
 
         def _json(self, status: int, body: object) -> None:
+            # Drain a bounded rejected POST before closing: unread input can
+            # turn a useful 400/503 into a TCP reset on Windows.
+            if self.command == 'POST' and not getattr(self, '_body_consumed', False):
+                try:
+                    pending = int(self.headers.get('Content-Length', '0'))
+                    if 0 < pending <= 1048576:
+                        self.connection.settimeout(2)
+                        self.rfile.read(pending)
+                except (OSError, ValueError):
+                    pass
+                self._body_consumed = True
             data = json.dumps(body, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -215,18 +251,52 @@ def make_handler(app: WorkbenchApp):
             self.wfile.write(data)
 
         def do_GET(self) -> None:  # noqa: N802
+            try:
+                path = urlparse(self.path).path
+                if path in {'/api/health','/api/v1/initiatives/home','/api/v1/initiatives'} or path.startswith('/api/v1/backups') or not path.startswith('/api/'):
+                    return self._get()
+                with MaintenanceGate(app.runtime).write():
+                    return self._get()
+            except MaintenanceBusy as exc:
+                return self._json(503, {'error': 'maintenance_busy', 'message': str(exc)})
+
+        def _get(self) -> None:
             parsed = urlparse(self.path)
             path = parsed.path
             query = parse_qs(parsed.query)
             try:
                 if path == "/api/health":
                     return self._json(200, app.health())
+                if path == '/api/v1/backups':
+                    return self._json(200, app.backups.list())
+                if path.startswith('/api/v1/backups/'):
+                    parts = path.split('/')
+                    if len(parts) == 6 and parts[-1] == 'download':
+                        archive = app.backups.archive_path(parts[-2])
+                        size = archive.stat().st_size
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'application/zip')
+                        self.send_header('Content-Length', str(size))
+                        self.send_header('Content-Disposition', 'attachment; filename="' + archive.name + '"')
+                        self.send_header('X-Content-Type-Options', 'nosniff')
+                        self.end_headers()
+                        with archive.open('rb') as source:
+                            while chunk := source.read(1024 * 1024):
+                                self.wfile.write(chunk)
+                        return
+                    if len(parts) == 5:
+                        return self._json(200, app.backups.get(parts[-1]))
+                    return self._json(404, {'error': 'not_found'})
                 if path == '/api/v1/projects':
                     return self._json(200, {'items': app.projects.list(),
                         'default_project': (app.projects.default() or {'id': app.default_project})['id'],
                         'registration': {'sources': ['local', 'git'], 'eval_optional': True}})
-                if path == '/api/v1/initiatives':
-                    return self._json(200, {'items': app.initiatives.list(100)})
+                if path in {'/api/v1/initiatives', '/api/v1/initiatives/home'}:
+                    if set(query) - {'project_id','group','q','include_mock','include_hidden','limit','cursor'}:
+                        raise ValueError('事项查询包含未知参数')
+                    filters = {k: v[0] for k, v in query.items()}
+                    return self._json(200, app.initiative_home.page(**filters) if path.endswith('/home')
+                                      else app.initiatives.query(**filters))
                 if path.startswith('/api/v1/initiatives/'):
                     if path.endswith('/workflow'):
                         return self._json(200, app.initiative_workflow.get(path.split('/')[-2]))
@@ -236,7 +306,8 @@ def make_handler(app: WorkbenchApp):
                                             "execution_modes": ["verify"], "requires_idempotency_key": True,
                                             "code_execution": "reviewable_plan" if app.code.enabled else "explicit_course_cli_only",
                                             "web_code_execution": app.code.enabled,
-                                            "code_readiness": app.code.readiness()})
+                                            "code_readiness": app.code.readiness(),
+                                            "input_limits": {'v0_spec_chars': 24000, 'v0_request_bytes': 524288}})
                 if path.startswith('/api/v1/execution/plans/'):
                     return self._json(200, app.code.get(path.rsplit('/', 1)[-1]))
                 if path == "/api/course/current":
@@ -327,18 +398,42 @@ def make_handler(app: WorkbenchApp):
                 self._json(400, {"error": type(exc).__name__, "message": str(exc)})
 
         def do_POST(self) -> None:  # noqa: N802
+            self._body_consumed = False
+            try:
+                if urlparse(self.path).path.startswith('/api/v1/backups'):
+                    return self._post()
+                with MaintenanceGate(app.runtime).write():
+                    return self._post()
+            except MaintenanceBusy as exc:
+                return self._json(503, {'error': 'maintenance_busy', 'message': str(exc)})
+
+        def _post(self) -> None:
             try:
                 path = urlparse(self.path).path
                 content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
                 if content_type != "application/json":
                     return self._json(415, {"error": "unsupported_media_type", "message": "只接受 application/json"})
                 length = int(self.headers.get("Content-Length", "0"))
-                maximum = 131072 if path in {'/api/v1/execution/plans', '/api/v1/execution/daily-plans'} else 32768 if path.startswith('/api/v1/initiatives') else 8192
+                parts = path.split('/')
+                is_v0 = len(parts) == 7 and parts[:4] == ['', 'api', 'v1', 'initiatives'] and parts[-2:] == ['workflow', 'v0']
+                maximum = 524288 if is_v0 else 131072 if path in {'/api/v1/execution/plans', '/api/v1/execution/daily-plans'} else 32768 if path.startswith('/api/v1/initiatives') else 8192
                 if length <= 0 or length > maximum:
                     return self._json(400, {"error": "invalid_body", "message": "请求体为空或过大"})
-                body = json.loads(self.rfile.read(length).decode("utf-8"))
+                raw = self.rfile.read(length)
+                self._body_consumed = True
+                body = json.loads(raw.decode("utf-8"))
                 if not isinstance(body, dict):
                     raise ValueError("请求体必须是 JSON 对象")
+                if path.startswith('/api/v1/backups'):
+                    if self.client_address[0] not in {'127.0.0.1', '::1'} or (self.headers.get('Origin') and self.headers['Origin'] != 'http://' + self.headers.get('Host', '')):
+                        return self._json(403, {'error': 'cross_origin', 'message': '请从本机工作台操作备份'})
+                    actor = app.initiative_workflow.actor(body.get('actor'))
+                    if path == '/api/v1/backups':
+                        return self._json(201, app.backups.create(actor, busy_check=app.backup_busy))
+                    parts = path.split('/')
+                    if len(parts) == 6 and parts[-1] == 'verify':
+                        return self._json(200, app.backups.verify(app.backups.archive_path(parts[-2])))
+                    return self._json(404, {'error': 'not_found'})
                 if path == '/api/v1/projects' or path.startswith('/api/v1/projects/'):
                     if self.client_address[0] not in {'127.0.0.1', '::1'} or (self.headers.get('Origin') and self.headers['Origin'] != 'http://' + self.headers.get('Host', '')):
                         raise ValueError('项目登记只允许从本机工作台操作')
@@ -412,7 +507,7 @@ def make_handler(app: WorkbenchApp):
                         data['project_id'] = data.get('project_id') or app.default_project
                         if data['project_id'] == 'FlowERP': data['project_id'] = app.default_project
                         app.projects.get(data['project_id'])
-                        return self._json(201, app.initiatives.create(data, actor))
+                        return self._json(201, app.initiatives.create(data, actor, submission_key=body.get('submission_key')))
                     parts = path.split('/')
                     if len(parts) == 6:
                         item_id, action = parts[-2:]
@@ -511,7 +606,7 @@ def make_handler(app: WorkbenchApp):
                             str(body.get("note", "")),
                         ))
                 return self._json(404, {"error": "not_found"})
-            except (TaskSubmissionConflict, WorkflowConflict) as exc:
+            except (TaskSubmissionConflict, WorkflowConflict, InitiativeSubmissionConflict) as exc:
                 self._json(409, {"error": "conflict", "message": str(exc)})
             except json.JSONDecodeError:
                 self._json(400, {"error": "invalid_json", "message": "请求体不是合法 JSON"})
@@ -538,7 +633,8 @@ def serve(host: str = "127.0.0.1", port: int = 8001, runtime_dir: str = ".runtim
         )
         try:
             app.tasks.quarantine_interrupted_web_code_tasks()
-            app.automation.recover()
+            if not (app.runtime / RESTORE_MARKER).is_file():
+                app.automation.recover()
             print(f"个人研发工作台 http://{host}:{port}  （客户项目 FlowERP 在 {app.erp_url}）", flush=True)
             server.serve_forever()
         finally:

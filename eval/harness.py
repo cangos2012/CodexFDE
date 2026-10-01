@@ -48,6 +48,8 @@ EVALS: list[tuple[str, str, Callable[[], str]]] = [
     ("bank_statement_control_and_reconciliation", "blocking", cases.bank_statement_control_and_reconciliation),
     ("plugin_lifecycle_is_reversible", "blocking", cases.plugin_lifecycle_is_reversible),
     ("delivery_evidence_and_review_controls", "blocking", cases.delivery_evidence_and_review_controls),
+    ("initiative_delivery_is_controlled", "blocking", cases.initiative_delivery_is_controlled),
+    ("learning_reuse_is_evidence_bound", "blocking", cases.learning_reuse_is_evidence_bound),
     ("web_api_and_persistence_projection_agree", "blocking", cases.web_api_and_persistence_projection_agree),
     ("ci_evidence_envelope_is_honest", "blocking", cases.ci_evidence_envelope_is_honest),
     ("write_sets_reject_conflict", "blocking", cases.write_sets_reject_conflict),

@@ -97,18 +97,53 @@ class LearningStore:
             raise ValueError('事项没有项目归属')
         return row['project_id']
 
-    def _belongs(self, initiative_id, task_id):
+    def _task_ids(self, initiative_id):
         with self.tasks.connect() as db:
             row = db.execute('SELECT linked_task_id FROM initiatives WHERE id=?', (initiative_id,)).fetchone()
-            flow = db.execute('SELECT payload FROM initiative_workflows WHERE id=?', (initiative_id,)).fetchone()
+            has_workflows = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='initiative_workflows'").fetchone()
+            flow = db.execute('SELECT payload FROM initiative_workflows WHERE id=?', (initiative_id,)).fetchone() if has_workflows else None
         data = json.loads(flow['payload']) if flow else {}
         ids = {data.get('active_task_id'), row['linked_task_id'] if row else None}
         ids.update(i.get('task_id') for i in data.get('iterations', []))
         for cycle in data.get('completed_cycles', []):
             ids.add(cycle.get('active_task_id'))
             ids.update(i.get('task_id') for i in cycle.get('iterations') or [])
-        if task_id not in ids:
+        return ids - {None, ''}
+
+    def _belongs(self, initiative_id, task_id):
+        if task_id not in self._task_ids(initiative_id):
             raise ValueError('来源任务不属于指定事项')
+
+    def source_options(self, initiative_id):
+        """Eligible original tasks and named accepted failure feedback for this item."""
+        task_ids = self._task_ids(initiative_id)
+        if not task_ids:
+            return {'tasks': [], 'feedback': []}
+        with self.tasks.connect() as db:
+            has_feedback = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='feedback'").fetchone()
+            feedback = [dict(row) for row in db.execute(
+                "SELECT id,task_id,conclusion FROM feedback WHERE status='accepted' AND COALESCE(reviewed_by,'')<>'' "
+                "AND task_id IN (" + ','.join('?' for _ in task_ids) + ') ORDER BY id', tuple(task_ids))] if has_feedback else []
+        tasks, failures = [], set()
+        for task_id in sorted(task_ids):
+            try:
+                task = self.tasks.get(task_id)
+            except KeyError:
+                continue
+            success = task['status'] == 'completed' and task.get('review_decision') == 'approve' and bool(task.get('reviewed_by'))
+            if success:
+                try:
+                    self.report(task, passing=True)
+                except (ValueError, OSError):
+                    success = False
+            failed = task['status'] in {'rework', 'failed', 'dead_letter'}
+            if failed and any(f['task_id'] == task_id for f in feedback):
+                failures.add(task_id)
+            if success or task_id in failures:
+                tasks.append({'id': task_id, 'status': task['status'], 'eligible_success': success,
+                              'label': task_id + ' · ' + task['status'] + ' · ' + task['request']})
+        return {'tasks': tasks, 'feedback': [{'id': f['id'], 'task_id': f['task_id'],
+            'label': f['id'] + ' · ' + f['conclusion']} for f in feedback if f['task_id'] in failures]}
 
     def report(self, task, *, passing=False):
         report = task.get('result') or {}

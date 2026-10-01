@@ -5,7 +5,7 @@ function learningText(tag, text) {
 function learningAction(fields) {return initiativeWorkAction('learning',{fields});}
 function renderLearning(data) {
   const panel=iw('learning');if(!panel)return;
-  const busy=['researching','queued','executing','cancelling','integrating'].includes(data.stage) || initiativeWorkPending;
+  const busy=['researching','queued','executing','checking','cancelling','integrating'].includes(data.stage) || initiativeWorkPending;
   const recall=data.learning_recall, learning=data.learning || {assets:[],bindings:[],metrics:{}};
   const decisions=data.learning_decision;
   iw('learning-summary').textContent=recall ?
@@ -40,7 +40,7 @@ function renderLearning(data) {
   iw('learning-decide').disabled=busy || !recall || !['ready','clarifying'].includes(data.stage);
   ['recall','trial'].forEach(k=>iw('learning-'+k).disabled=busy || !['idle','clarifying','ready','rework','failed'].includes(data.stage));
   iw('learning-create').disabled=busy;
-  if(iw('learning-task').dataset.initiative!==data.id){iw('learning-task').dataset.initiative=data.id;iw('learning-task').value=data.active_task_id || '';}
+  renderLearningSources(data,busy);
   const assets=iw('learning-assets'), assetSignature=JSON.stringify([data.id,learning.assets.map(a=>[a.id,a.state,a.trial_approved,a.history.length])]);
   if(assets.dataset.signature!==assetSignature) {
     assets.dataset.signature=assetSignature;assets.replaceChildren();
@@ -56,9 +56,39 @@ function renderLearning(data) {
   assets.querySelectorAll('button,textarea').forEach(b=>b.disabled=busy);
   iw('learning-evidence').textContent=JSON.stringify({metrics:learning.metrics,bindings:learning.bindings},null,2);
 }
+function renderLearningSources(data,busy) {
+  const sources=data.learning_sources || {tasks:[],feedback:[]}, task=iw('learning-task');
+  const signature=JSON.stringify([data.id,sources]);
+  if(task.dataset.sources!==signature) {
+    const previous=task.dataset.initiative===data.id ? task.value : data.active_task_id;
+    task.replaceChildren();const empty=learningText('option','选择本事项真实来源任务');empty.value='';task.append(empty);
+    for(const source of sources.tasks){const option=learningText('option',source.label || source.id);option.value=source.id;task.append(option);}
+    task.dataset.initiative=data.id;task.dataset.sources=signature;
+    task.value=sources.tasks.some(t=>t.id===previous) ? previous : '';
+  }
+  task.disabled=busy;renderLearningFeedback(sources,busy);
+  task.onchange=()=>renderLearningFeedback(sources,busy);
+}
+function renderLearningFeedback(sources,busy) {
+  const box=iw('learning-feedback'), rows=sources.feedback.filter(f=>f.task_id===iw('learning-task').value);
+  const signature=JSON.stringify(rows);
+  if(box.dataset.sources!==signature){
+    const previous=box.value;box.replaceChildren();const empty=learningText('option','成功任务可留空；失败任务须选择已接受反馈');empty.value='';box.append(empty);
+    for(const row of rows){const option=learningText('option',row.label || row.id);option.value=row.id;box.append(option);}
+    box.value=rows.some(r=>r.id===previous) ? previous : rows.length===1 ? rows[0].id : '';
+    box.dataset.sources=signature;
+  }
+  box.disabled=busy;
+}
 function initLearning() {
   if(!iw('learning'))return;
-  iw('learning-kind').onchange=()=>iw('learning-recipe').hidden=iw('learning-kind').value!=='workflow';
+  iw('learning-kind').onchange=()=>{
+    iw('learning-recipe').hidden=iw('learning-kind').value!=='workflow';
+    if(iw('learning-kind').value==='workflow') {
+      const defaults={precheck:'检查本次输入及授权文件，前置条件不满足时停止。',implement:'按照本事项已确认的方案，在授权写集内实现并保留实际 Diff。',eval:'运行本项目阻断级 Eval，保留报告、退出码与失败证据。',review:'由本事项确认的验收负责人对照实际结果与验收标准作出决定。'};
+      for(const [key,text] of Object.entries(defaults))if(!iw('learning-'+key).value.trim())iw('learning-'+key).value=text;
+    }
+  };
   iw('learning-recall').onclick=()=>learningAction({action:'recall'});
   iw('learning-trial').onclick=()=>learningAction({action:'recall',trials:true});
   iw('learning-decide').onclick=()=>{

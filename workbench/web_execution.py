@@ -163,6 +163,18 @@ class WebExecution:
         return {'plan_id': plan_id, 'state': 'starting', 'task_id': None}
 
     def _run(self, plan_id):
+        from contextlib import ExitStack
+        from .maintenance import MaintenanceBusy, MaintenanceGate
+        with ExitStack() as ownership:
+            while True:
+                try:
+                    ownership.enter_context(MaintenanceGate(self.runtime).write())
+                    break
+                except MaintenanceBusy:
+                    time.sleep(.05)
+            self._run_owned(plan_id)
+
+    def _run_owned(self, plan_id):
         plan = self.get(plan_id)
         def created(task):
             with self.lock:

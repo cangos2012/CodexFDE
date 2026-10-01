@@ -51,7 +51,7 @@ class InitiativeWorkflowTests(unittest.TestCase):
             progress('{"type":"research.started"}')
             return {'proposal': {'findings': ['已有数值实现'], 'questions': list(self.questions),
                 'goal': '更新数值', 'acceptance': ['数值按决定更新'], 'non_goals': ['不改其他模块'],
-                'write_scope': ['flowerp'], 'steps': ['修改数值并运行检查'], 'sources': ['flowerp/value.py']},
+                'write_scope': ['workbench'], 'steps': ['修改数值并运行检查'], 'sources': ['workbench/value.py']},
                 'source_manifest': manifest(source, runtime), 'invocation': {'test_fixture': True}}
         def submit(source, runtime, tasks, plan, created):
             return submit_daily(source, runtime, tasks, plan, created, runner_factory=self.fixture.runner(self.value))
@@ -73,10 +73,10 @@ class InitiativeWorkflowTests(unittest.TestCase):
     def test_research_packet_contains_real_source_and_detects_drift(self):
         fingerprints = manifest(self.root, self.runtime)
         packet = source_context(self.root, fingerprints, {'initiative': {'goal': 'value'}})
-        file = next(f for f in packet['files'] if f['path'] == 'flowerp/value.py')
+        file = next(f for f in packet['files'] if f['path'] == 'workbench/value.py')
         self.assertIn('VALUE = 1', file['excerpts'][0]['text'])
-        self.assertEqual(fingerprints['flowerp/value.py'], file['sha256'])
-        (self.root / 'flowerp/value.py').write_text('VALUE = 9\n')
+        self.assertEqual(fingerprints['workbench/value.py'], file['sha256'])
+        (self.root / 'workbench/value.py').write_text('VALUE = 9\n')
         with self.assertRaisesRegex(ValueError, '源码变化'):
             source_context(self.root, fingerprints, {'initiative': {'goal': 'value'}})
 
@@ -84,8 +84,8 @@ class InitiativeWorkflowTests(unittest.TestCase):
         original = self.service.researcher
         def research(*args):
             result = original(*args)
-            (self.root / 'flowerp/value.py').write_text('VALUE = 8\n')
-            result['changed_sources'] = ['flowerp/value.py']
+            (self.root / 'workbench/value.py').write_text('VALUE = 8\n')
+            result['changed_sources'] = ['workbench/value.py']
             return result
         self.service.researcher = research
         self.questions = []
@@ -94,7 +94,7 @@ class InitiativeWorkflowTests(unittest.TestCase):
         self.assertEqual('ready', result['stage'])
         self.assertTrue(result['proposal'])
         self.assertIn('本事项所属项目', result['warning'])
-        self.assertEqual([{'path': 'flowerp/value.py', 'kind': 'modified'}], result['source_check']['files'])
+        self.assertEqual([{'path': 'workbench/value.py', 'kind': 'modified'}], result['source_check']['files'])
         with self.assertRaisesRegex(ValueError, '源码已变化'):
             self.call('confirm', 'reviewer')
 
@@ -109,20 +109,20 @@ class InitiativeWorkflowTests(unittest.TestCase):
         self.wait()
         data = self.service._load(self.item['id'])
         data['warning'] = '调研期间源码有更新'
-        self.service._event(data, 'system', data['warning'], changed_sources=['flowerp/value.py'])
+        self.service._event(data, 'system', data['warning'], changed_sources=['workbench/value.py'])
         self.service._save(data)
         state = self.state()
         self.assertEqual('current', state['source_check']['status'])
         self.assertEqual('', state['warning'])
-        self.assertEqual(['flowerp/value.py'], state['messages'][-1]['changed_sources'])
+        self.assertEqual(['workbench/value.py'], state['messages'][-1]['changed_sources'])
         self.assertNotIn('research_manifest', state)
-        (self.root / 'flowerp/value.py').write_text('VALUE = 7\n')
+        (self.root / 'workbench/value.py').write_text('VALUE = 7\n')
         self.assertEqual('changed', self.state()['source_check']['status'])
 
     def test_research_refresh_preserves_answers_and_allows_confirmation(self):
         self.call('discuss', '人员待定，先完善方案')
         self.wait()
-        (self.root / 'flowerp/value.py').write_text('VALUE = 7\n')
+        (self.root / 'workbench/value.py').write_text('VALUE = 7\n')
         self.assertEqual('changed', self.state()['source_check']['status'])
         self.questions = []
         self.call('discuss', '保留回答，重新核对最新项目')
@@ -164,16 +164,16 @@ class InitiativeWorkflowTests(unittest.TestCase):
         second = self.wait()
         self.assertEqual('review', second['stage'], second.get('error'))
         self.assertEqual(2, len(second['iterations']))
-        self.assertEqual('VALUE = 2\n', (first_workspace / 'flowerp/value.py').read_text())
-        self.assertEqual('VALUE = 1\n', (self.root / 'flowerp/value.py').read_text())
+        self.assertEqual('VALUE = 2\n', (first_workspace / 'workbench/value.py').read_text())
+        self.assertEqual('VALUE = 1\n', (self.root / 'workbench/value.py').read_text())
         with self.assertRaisesRegex(ValueError, '验收负责人'):
             self.call('accept', '已核对')
         self.call('accept', '已核对数值与检查', actor='reviewer')
         self.call('integrate', actor='reviewer')
         final = self.wait()
         self.assertEqual('integrated', final['stage'], final.get('error'))
-        self.assertEqual('VALUE = 3\n', (self.root / 'flowerp/value.py').read_text())
-        self.assertTrue((self.root / 'flowerp/new.py').exists())
+        self.assertEqual('VALUE = 3\n', (self.root / 'workbench/value.py').read_text())
+        self.assertTrue((self.root / 'workbench/new.py').exists())
         self.assertTrue(Path(final['integration']['receipt']).is_file())
         restored = InitiativeWorkflow(self.root, self.runtime, self.items, self.tasks, enabled=True)
         self.assertEqual(final['messages'], restored.get(self.item['id'])['messages'])
@@ -183,21 +183,22 @@ class InitiativeWorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '进展已变化'):
             self.service.execute(self.item['id'], 'owner', 0)
         self.call('execute')
-        self.assertEqual('review', self.wait()['stage'])
+        state = self.wait()
+        self.assertEqual('review', state['stage'], state.get('error') or state.get('task'))
         workspace = Path(self.state()['workspace'])
-        (workspace / 'flowerp/value.py').write_text('VALUE = 999\n')
+        (workspace / 'workbench/value.py').write_text('VALUE = 999\n')
         with self.assertRaisesRegex(ValueError, '检查后发生变化'):
             self.call('accept', '通过', actor='reviewer')
 
     def test_changed_main_source_cannot_be_overwritten(self):
         self.candidate()
         self.call('accept', '通过', actor='reviewer')
-        (self.root / 'flowerp/value.py').write_text('VALUE = 88\n')
+        (self.root / 'workbench/value.py').write_text('VALUE = 88\n')
         self.call('integrate', actor='reviewer')
         result = self.wait()
         self.assertEqual('failed', result['stage'])
         self.assertIn('源项目已变化', result['error'])
-        self.assertEqual('VALUE = 88\n', (self.root / 'flowerp/value.py').read_text())
+        self.assertEqual('VALUE = 88\n', (self.root / 'workbench/value.py').read_text())
 
     def test_eval_failure_and_no_change_remain_rework(self):
         for value in (-1, None):
@@ -230,16 +231,16 @@ class InitiativeWorkflowTests(unittest.TestCase):
         self.call('accept', '通过', actor='reviewer')
         real_write = Path.write_bytes
         def write(path, content):
-            if path == self.root / 'flowerp/value.py':
-                (self.root / 'flowerp/new.py').write_text('EXTERNAL = True\n')
+            if path == self.root / 'workbench/value.py':
+                (self.root / 'workbench/new.py').write_text('EXTERNAL = True\n')
                 raise OSError('disk write failed')
             return real_write(path, content)
         with patch.object(Path, 'write_bytes', write):
             self.call('integrate', actor='reviewer')
             result = self.wait()
         self.assertEqual('failed', result['stage'])
-        self.assertEqual('EXTERNAL = True\n', (self.root / 'flowerp/new.py').read_text())
-        self.assertEqual('VALUE = 1\n', (self.root / 'flowerp/value.py').read_text())
+        self.assertEqual('EXTERNAL = True\n', (self.root / 'workbench/new.py').read_text())
+        self.assertEqual('VALUE = 1\n', (self.root / 'workbench/value.py').read_text())
 
     def test_http_routes_revision_checks_and_cross_origin_rejection(self):
         app = WorkbenchApp(self.runtime, enable_code_execution=True)
@@ -307,7 +308,7 @@ class InitiativeWorkflowTests(unittest.TestCase):
         proposal = {'goal': '更新数值', 'findings': ['找到数值实现'], 'questions': ['目标值？'],
             'users': [], 'scope': [], 'test_plan': [],
             'non_goals': [], 'acceptance': [], 'write_scope': [], 'steps': [],
-            'sources': ['flowerp/value.py', example, prompt]}
+            'sources': ['workbench/value.py', example, prompt]}
         calls = []
         def run(runner, command, prompt, timeout, on_line, started):
             calls.append(command)
@@ -322,7 +323,7 @@ class InitiativeWorkflowTests(unittest.TestCase):
             self.assertEqual(0, result['invocation']['returncode'])
             self.assertTrue((folder / 'events.jsonl').exists())
             proposal['questions'] = []
-            proposal.update(write_scope=['flowerp/value.py'], acceptance=['值等于 2'], steps=['修改数值'])
+            proposal.update(write_scope=['workbench/value.py'], acceptance=['值等于 2'], steps=['修改数值'])
             with self.assertRaisesRegex(ValueError, '使用者'):
                 InitiativeResearch()(self.root, self.runtime, self.runtime / 'incomplete-prd', {}, lambda _: None)
             proposal.update(users=['使用者读取数值'], scope=['将数值更新为 2'],

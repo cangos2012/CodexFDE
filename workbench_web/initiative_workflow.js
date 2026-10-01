@@ -17,7 +17,7 @@ function iwDiscussionText(extra='') {
 }
 function renderIwAnswers(data, busy) {
   const questions=data.stage==='clarifying' ? data.proposal?.questions || [] : [];
-  const signature=JSON.stringify([data.id,questions]);
+  const signature=JSON.stringify([data.id,data.document_version || 0,questions]);
   const box=iw('answers');
   // Polling must not overwrite an answer while the user is typing.
   if(box.dataset.questions!==signature && !busy) {
@@ -34,6 +34,7 @@ function renderIwAnswers(data, busy) {
   iw('defer-people').disabled=initiativeWorkPending || !data.enabled;
 }
 function renderInitiativeWork(data) {
+  if(typeof WorkbenchDrafts!=='undefined')WorkbenchDrafts.flush();
   renderEvalHarness(data);
   const loop=data.repair_loop || {config:{},history:[]};
   iw('loop-status').textContent=(loop.config.enabled ? '停止闸门已启用 · ' : '当前仅观察，停止闸门未启用 · ')+
@@ -149,6 +150,7 @@ function renderInitiativeWork(data) {
   }
   renderDeliveryWorkspace(data);
   if(data.v0){['accept','integrate','preview','execute','discuss'].forEach(id=>iw(id).hidden=true);}
+  if(typeof trackWorkflowDrafts==='function')trackWorkflowDrafts(data);
 }
 async function refreshInitiativeWork() {
   if(!initiativeWorkId)return;
@@ -159,10 +161,20 @@ async function refreshInitiativeWork() {
   }catch(error){if(id===initiativeWorkId)iw('error').textContent=error.message;}
 }
 function showInitiativeWork(item) {
+  if(typeof WorkbenchDrafts!=='undefined')WorkbenchDrafts.detach(['discussion','review','v0','learning-candidate','learning-decisions']);
   clearInterval(initiativeWorkTimer);initiativeWorkTimer=null;++initiativeWorkRead;
   initiativeWorkId=item && item.id;initiativeWork=null;
   document.getElementById('initiative-work').hidden=!item;
   activeIwPane=null;activeIwStage=null;
+  document.getElementById('v0-confirmed').checked=false;
+  ['v0-spec','v0-workspace','v0-files','iw-message','iw-note','iw-next',
+    'iw-release-version','iw-release-environment','iw-release-evidence',
+    'iw-outcome-period','iw-outcome-target','iw-outcome-actual','iw-outcome-observation','iw-outcome-evidence','iw-outcome-conclusion',
+    ...['task','feedback','supersedes','title','content','applies','excludes','boundary','conflict','parameters','paths','contains','precheck','implement','eval','review','outputs','stop','rollback'].map(k=>'iw-learning-'+k)
+  ].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  iw('answers').replaceChildren();delete iw('answers').dataset.questions;
+  iw('learning-kind').value='memory';iw('learning-recipe').hidden=true;
+  ['task','feedback'].forEach(k=>{delete iw('learning-'+k).dataset.sources;delete iw('learning-'+k).dataset.initiative;});
   if(!item)return;
   iw('message').value='';iw('note').value='';iw('reviewer').value=item.reviewer || '';
   iw('preview-frame').hidden=true;iw('preview-frame').removeAttribute('src');iw('preview-link').hidden=true;iw('preview-status').textContent='';
@@ -172,19 +184,30 @@ function showInitiativeWork(item) {
 async function initiativeWorkAction(action, extra={}) {
   if(!initiativeWork || initiativeWorkPending)return;
   const itemId=initiativeWorkId;
+  const draftGroup=({discuss:'discussion',accept:'review',v0:'v0'})[action] ||
+    (action==='learning' ? ({create:'learning-candidate',decide:'learning-decisions'})[extra.fields?.action] : null);
+  const draftSnapshot=draftGroup && typeof WorkbenchDrafts!=='undefined' ? WorkbenchDrafts.capture?.(draftGroup) : null;
+  const discussionInput=()=>({message:iw('message').value,
+    answers:Object.fromEntries([...iw('answers').querySelectorAll('textarea')].map(el=>[el.dataset.question,el.value]))});
+  const submittedDiscussion=action==='discuss' ? JSON.stringify(discussionInput()) : null;
+  const clearDiscussion=()=>{iw('message').value='';iw('answers').querySelectorAll('textarea').forEach(el=>el.value='');};
   let actionError='';
   initiativeWorkPending=true;renderInitiativeWork(initiativeWork);
   try {
     const data=await api('/api/v1/initiatives/'+itemId+'/workflow/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor:actorName(),revision:initiativeWork.revision,...extra})});
-    if(itemId!==initiativeWorkId)return;
+    if(itemId!==initiativeWorkId){if(draftSnapshot)WorkbenchDrafts.clearSubmitted(draftSnapshot);return;}
+    if(draftSnapshot)WorkbenchDrafts.clearSubmitted(draftSnapshot,action==='discuss' ? clearDiscussion : undefined);
+    else if(action==='discuss' && JSON.stringify(discussionInput())===submittedDiscussion)clearDiscussion();
     renderInitiativeWork(data);
-    if(action==='discuss'){iw('message').value='';iw('answers').querySelectorAll('textarea').forEach(el=>el.value='');}
     if(action==='confirm') {
-      currentInitiative=await api('/api/v1/initiatives/'+itemId);
+      const confirmed=await api('/api/v1/initiatives/'+itemId);
+      if(itemId!==initiativeWorkId)return;
+      currentInitiative=confirmed;
       document.getElementById('initiative-decision').hidden=true;
     }
+    return true;
   }catch(error){actionError=error.message;}
-  finally{initiativeWorkPending=false;if(initiativeWork)renderInitiativeWork(initiativeWork);if(actionError)iw('error').textContent=actionError;}
+  finally{initiativeWorkPending=false;if(initiativeWork)renderInitiativeWork(initiativeWork);if(actionError && itemId===initiativeWorkId)iw('error').textContent=actionError;}
 }
 function initInitiativeWork() {
   iw('eval-run').onclick=()=>initiativeWorkAction('eval');
@@ -204,10 +227,13 @@ function initInitiativeWork() {
   document.getElementById('v0-submit').onclick=async()=>{
     const value=id=>document.getElementById(id).value;
     if(!document.getElementById('v0-confirmed').checked){document.getElementById('v0-status').textContent='请先核对并确认本次合同和执行参数。';return;}
-    await initiativeWorkAction('v0', {spec_text:value('v0-spec'), execution_mode:value('v0-mode'),
+    const extra={spec_text:value('v0-spec'), execution_mode:value('v0-mode'),
       workspace_path:value('v0-workspace').trim(), write_scope:value('v0-files').split(/\r?\n/).map(v=>v.trim()).filter(Boolean),
-      execution_timeout_seconds:Number(value('v0-timeout')), confirmed:true});
-    document.getElementById('v0-confirmed').checked=false;
+      execution_timeout_seconds:Number(value('v0-timeout')), confirmed:true};
+    const text=extra.spec_text, payload=JSON.stringify({actor:document.getElementById('task-actor').value.trim(),revision:initiativeWork?.revision,...extra});
+    if([...text].length>24000){document.getElementById('v0-status').textContent='合同最多 24,000 个字符。输入已保留，请缩短后提交。';return;}
+    if(new TextEncoder().encode(payload).length>524288){document.getElementById('v0-status').textContent='本次请求超过 512 KiB。输入已保留，请缩短路径或范围内容。';return;}
+    if(await initiativeWorkAction('v0',extra))document.getElementById('v0-confirmed').checked=false;
   };
   document.getElementById('v0-open-task').onclick=()=>{
     if(initiativeWork && initiativeWork.task)loadDetail(initiativeWork.task.id);

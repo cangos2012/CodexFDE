@@ -50,6 +50,16 @@ def isolated_report_contract_is_honest() -> str:
     return "隔离报告逐项对账，退出码矛盾、空用例与身份替换均拒绝"
 
 
+def initiative_delivery_is_controlled() -> str:
+    from eval.workbench_contracts import initiative_delivery_is_controlled as contract
+    return contract()
+
+
+def learning_reuse_is_evidence_bound() -> str:
+    from eval.workbench_contracts import learning_reuse_is_evidence_bound as contract
+    return contract()
+
+
 def bootstrap_evidence_is_honest() -> str:
     from workbench import bootstrap
     assert hasattr(bootstrap, "BootstrapLedger"), "L01 工作台任务与证据账能力尚未实现"

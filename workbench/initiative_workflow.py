@@ -304,6 +304,7 @@ class InitiativeWorkflow:
         data['enabled'] = self.enabled
         data['project'] = self.project(item_id)
         data['learning'] = self.learning.view(item_id)
+        data['learning_sources'] = self.learning.source_options(item_id)
         data['prd_confirmed'] = bool(data.get('documents') and data['documents'][-1].get('prd_confirmation'))
         # The saved warning describes a past observation, not the current tree.
         # Keep that observation in messages and expose a fresh, inspectable check.
@@ -447,7 +448,21 @@ class InitiativeWorkflow:
             passed = report['summary']['decision'] == 'pass'
             current['stage'] = prior if passed else 'rework'
             if not passed and self.tasks.get(data['active_task_id'])['status'] == 'review':
-                self.tasks.transition(data['active_task_id'], 'rework', '候选复验存在阻断失败', actor=actor, result=report)
+                # Keep the raw subprocess report in eval_runs, and freeze the
+                # task's failed result under the normal controlled report path.
+                # A named accepted failure can then be used as a learning source.
+                task_report = copy.deepcopy(report)
+                report_dir = self.runtime / 'reports'
+                report_dir.mkdir(parents=True, exist_ok=True)
+                report_path = report_dir / (data['active_task_id'] + '-' + secrets.token_hex(16) + '-manual-recheck.json')
+                task_report['report_path'] = (Path('reports') / report_path.name).as_posix()
+                task_report.pop('report_sha256', None)
+                payload = json.dumps(task_report, ensure_ascii=False, indent=2).encode('utf-8')
+                report_path.write_bytes(payload)
+                task_report['report_sha256'] = hashlib.sha256(payload).hexdigest()
+                self.tasks.transition(data['active_task_id'], 'rework', '候选复验存在阻断失败', actor=actor, result=task_report)
+            if not passed:
+                self.learning.finish(data['active_task_id'], note='候选 Eval 复验存在阻断失败，停用已采用流程并保留失败证据')
             self.tasks.append_event(data['active_task_id'], '候选 Eval 复验完成', actor=actor,
                                     evidence={'summary': report['summary'], 'runner': report['runner']})
             self._event(current, 'system', '候选复验完成；检查通过仍需人审。' if passed else '候选复验未通过，请返工。')
@@ -509,6 +524,18 @@ class InitiativeWorkflow:
         thread.start()
 
     def _worker(self, item_id, function, args):
+        from contextlib import ExitStack
+        from .maintenance import MaintenanceBusy, MaintenanceGate
+        with ExitStack() as ownership:
+            while True:
+                try:
+                    ownership.enter_context(MaintenanceGate(self.runtime).write())
+                    break
+                except MaintenanceBusy:
+                    time.sleep(.05)
+            self._worker_owned(item_id, function, args)
+
+    def _worker_owned(self, item_id, function, args):
         from .execution_control import local, checkpoint
         local.cancel_event = self.cancel_events[item_id]
         try:
