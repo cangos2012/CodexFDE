@@ -2,6 +2,8 @@
 
 项目建设主线：**用 Codex，搭建个人 AI 研发工作台；通过工作台组织人与 AI 协同，持续开发 FlowERP。** Codex 是开发伙伴，个人工作台是协同阵地，FlowERP 是持续增长的客户产品。
 
+**跟课从[学生学习入口](docs/README.md)开始：选择当前讲，按“理解 → 操作 → 留证 → 下一讲”继续。** 想查工作台设计、日常操作或运行问题时，再打开[按问题查阅的参考入口](docs/reference/README.md)。
+
 **FlowERP 已建立独立客户项目仓库：[https://github.com/congde/flowERP.git](https://github.com/congde/flowERP.git)。** CodexFDE 维护个人研发工作台与课程建设；FlowERP 的后续业务开发在独立仓库进行，由工作台添加该项目后组织调研、受控执行与验收。
 
 **工作台唯一入口是 http://127.0.0.1:8001/。** 真实需求从工作台内的“事项与决策”开始，课程跟跑也使用同一工作台。普通事项已接入 Codex 源码调研、需求澄清、确认执行、候选验收与显式集成。
@@ -305,7 +307,7 @@ python -X utf8 -m workbench.cli serve --runtime-dir .runtime/flowerp
 
 ## 跟课的正确入口
 
-不要靠 README 猜每讲任务。课程大纲是合同，任务卡是行动入口，CLI 是机器可执行投影。
+从[学生学习入口](docs/README.md)选择当前讲，按本讲 README 进入讲义、实践手册与提交模板。课程大纲维护合同，手册给出行动步骤，CLI 提供机器可执行投影。
 
 ### 查看合同与生成本讲 Spec
 
@@ -314,7 +316,7 @@ python -X utf8 -m workbench.cli course-contract --lesson 3
 python -X utf8 -m workbench.cli course-spec --lesson 3
 ```
 
-以 L03 为例，详细教学设计见 [把模糊需求变成可验收 Spec](docs/courses/L03/辅导资料.md)，学生行动卡见 [L03 Spec 驱动](docs/courses/L03/行动卡.md)。
+以 L03 为例，详细教学设计见 [把模糊需求变成可验收 Spec](docs/courses/L03/辅导资料.md)，学生行动摘要见 [L03 Spec 驱动](docs/courses/行动卡索引.md#l03)，详细操作见 [实践手册](docs/courses/L03/实践操作手册.md)。
 
 ### 从 L04 起执行真实交付
 
@@ -336,7 +338,7 @@ python -X utf8 -m workbench.cli course-status --require-baselines
 
 当输出中的 `baseline_semantics` 为 `progression_gate` 时，线性标签只是讲师侧的进度门闩；可构造性仍要看隔离工作区中的实际证据。
 
-16 讲的讲义、实践手册与行动卡统一收录在 [学生学习路线](docs/README.md#16-讲学习路线)。
+16 讲的讲义、实践手册与提交模板统一收录在 [学生学习路线](docs/README.md#16-讲学习路线)。目标、完成判断与必做提示词已合入同讲实践手册。
 
 ## 仓库地图
 
@@ -349,8 +351,8 @@ python -X utf8 -m workbench.cli course-status --require-baselines
 | [`workbench_web/`](workbench_web/) | 个人研发工作台统一界面，默认 8001，首页为唯一入口 |
 | [FlowERP `web/`](https://github.com/congde/flowERP/tree/main/web) | FlowERP 客户项目界面，默认 8000 |
 | [`harness_web/`](harness_web/) | 可选的完整 Harness 平台界面，默认 8010 |
-| [各讲 `slides/` 目录](docs/README.md#课件怎样获取) | 课堂 PPT 本地存放位置，不随 Git 发布 |
-| [逐讲行动卡](docs/README.md#16-讲学习路线) | 目标与提交核对，详细操作按本讲实践手册 |
+| [本讲 README 的唯一课件入口](docs/README.md#课件怎样获取) | 当前课堂 PPT 放在本讲根目录，旧版本在 `reference/archive/slides/`，不随 Git 发布 |
+| [实践定位索引](docs/courses/行动卡索引.md) | 续做时快速回到手册目标与提交位置；首次学习跟随本讲 README |
 | [`docs/courses/`](docs/courses/) | L00～L16 学生讲义、课程蓝图、任务卡与实验 |
 | [`docs/reference/`](docs/reference/) | 工作台、FlowERP 领域与运行边界参考资料 |
 | [`deploy/`](deploy/) | 容器化、运行与回滚资料 |

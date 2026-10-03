@@ -18,6 +18,7 @@ CONTRACT_LABELS = {
     "验收命令",
     "最终验收命令",
 }
+MANUAL_CONTRACT_LABELS = ("核心内容", "演示结果", "课内增量", "通过标准")
 
 
 def outline_contracts() -> dict[int, tuple[str, list[str]]]:
@@ -60,6 +61,58 @@ def replace_header(body: str, title_line: str, contract_lines: list[str]) -> str
     return "\n".join([title_line, ""] + contract_lines + [""] + rest) + ("\n" if body.endswith("\n") else "")
 
 
+def replace_manual_contract(body: str, contract_lines: list[str]) -> str:
+    """Update the four adopted contract bullets without moving learner prose."""
+    field_pattern = re.compile(r"^- \*\*(核心内容|演示结果|课内增量|通过标准)\*\*：")
+    replacements: dict[str, str] = {}
+    for line in contract_lines:
+        field = field_pattern.match(line)
+        if not field:
+            continue
+        label = field.group(1)
+        if label in replacements:
+            raise ValueError(f"课程大纲合同重复：{label}")
+        replacements[label] = line
+    missing_source = [label for label in MANUAL_CONTRACT_LABELS if label not in replacements]
+    if missing_source:
+        raise ValueError(f"课程大纲合同缺项：{', '.join(missing_source)}")
+
+    lines = body.splitlines(keepends=True)
+    positions: dict[str, list[int]] = {label: [] for label in MANUAL_CONTRACT_LABELS}
+    fence_character = ""
+    fence_length = 0
+    for index, line in enumerate(lines):
+        fence = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line.rstrip("\r\n"))
+        if fence_character:
+            if (fence and fence.group(1)[0] == fence_character
+                    and len(fence.group(1)) >= fence_length and not fence.group(2).strip()):
+                fence_character = ""
+            continue
+        if fence:
+            fence_character, fence_length = fence.group(1)[0], len(fence.group(1))
+            continue
+        field = field_pattern.match(line)
+        if field:
+            positions[field.group(1)].append(index)
+
+    missing = [label for label, indexes in positions.items() if not indexes]
+    duplicates = [f"{label}（行 {', '.join(str(index + 1) for index in indexes)}）"
+                  for label, indexes in positions.items() if len(indexes) > 1]
+    if missing or duplicates:
+        details = []
+        if missing:
+            details.append(f"缺项：{', '.join(missing)}")
+        if duplicates:
+            details.append(f"重复：{'; '.join(duplicates)}")
+        raise ValueError(f"实践手册正式合同{'；'.join(details)}；先确认正式合同位置，不自动补写")
+
+    for label, indexes in positions.items():
+        index = indexes[0]
+        ending = lines[index][len(lines[index].rstrip("\r\n")):]
+        lines[index] = replacements[label] + ending
+    return "".join(lines)
+
+
 def ensure_task_mainline(body: str) -> str:
     if "FlowERP 现场问题" in body:
         return body
@@ -90,7 +143,12 @@ def main() -> None:
     for relative in (Path("docs/courses"), Path("docs/courses/tasks")):
         directory = ROOT / relative
         paths = [path for path in sorted(directory.glob("L??-*.md")) if not path.name.endswith("-教师备课说明.md")]
-        paths.extend(path for number in range(1, 17) if (path := ROOT / f"docs/courses/L{number:02d}" / ("行动卡.md" if directory.name == "tasks" else "辅导资料.md")).is_file())
+        for number in range(1, 17):
+            path = ROOT / f"docs/courses/L{number:02d}" / ("行动卡.md" if directory.name == "tasks" else "辅导资料.md")
+            if directory.name == "tasks" and not path.is_file():
+                path = path.with_name("实践操作手册.md")
+            if path.is_file():
+                paths.append(path)
         for path in paths:
             match = re.fullmatch(r'L(\d{2})', path.parent.name) or re.match(r'L(\d{2})-', path.name)
             if not match:
@@ -101,8 +159,14 @@ def main() -> None:
             title, contract_lines = contracts[lesson]
             title_line = f"# L{lesson:02d}｜{title}"
             body = path.read_text(encoding="utf-8")
-            updated = replace_header(body, title_line, contract_lines)
-            if relative.as_posix() == "docs/courses/tasks":
+            if path.name == "实践操作手册.md":
+                try:
+                    updated = replace_manual_contract(body, contract_lines)
+                except ValueError as error:
+                    raise ValueError(f"{path.relative_to(ROOT)}：{error}") from error
+            else:
+                updated = replace_header(body, title_line, contract_lines)
+            if relative.as_posix() == "docs/courses/tasks" and path.name != "实践操作手册.md":
                 updated = ensure_task_mainline(updated)
             if updated != body:
                 path.write_text(updated, encoding="utf-8")

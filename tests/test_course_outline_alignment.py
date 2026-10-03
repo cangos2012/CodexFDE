@@ -31,6 +31,8 @@ def lesson_files(directory: Path) -> dict[int, Path]:
         canonical = directory / f"L{number:02d}" / "辅导资料.md"
         if directory.name == "tasks":
             canonical = directory.parent / f"L{number:02d}" / "行动卡.md"
+            if not canonical.is_file():
+                canonical = canonical.with_name("实践操作手册.md")
         if canonical.is_file():
             result[number] = canonical
     for path in sorted(directory.glob("L??-*.md")):
@@ -220,7 +222,7 @@ class CourseOutlineAlignmentTests(unittest.TestCase):
                 self.assertRegex(body, r"课程大纲|课程合同")
                 self.assertNotIn("教师备课区", body)
 
-    def test_student_entry_owns_all_sixteen_lesson_resources_and_titles(self) -> None:
+    def test_student_entry_routes_all_sixteen_lessons_to_their_resources(self) -> None:
         entry = (DOCS / "README.md").read_text(encoding="utf-8")
         rows = [line for line in entry.splitlines() if re.match(r"^\|\s*L\d{2}\s*\|", line)]
         expected = schedule_titles()
@@ -232,24 +234,27 @@ class CourseOutlineAlignmentTests(unittest.TestCase):
         for number, row in enumerate(rows, start=1):
             with self.subTest(lesson=number):
                 cells = [cell.strip() for cell in row.strip().strip("|").split("|")]
-                self.assertEqual(5, len(cells), "课程资源主表应保留五个明确维度")
                 title_link = re.fullmatch(r"\[([^\]]+)\]\(([^)]+)\)", cells[1])
                 self.assertIsNotNone(title_link, "主题须以本讲 README 为入口")
                 self.assertEqual(expected[number], title_link.group(1))
                 title_target = unquote(title_link.group(2).strip().strip("<>").split("#", 1)[0])
                 self.assertEqual((COURSES / f"L{number:02d}" / "README.md").resolve(),
                                  (DOCS / title_target).resolve())
+                lesson_directory = COURSES / f"L{number:02d}"
+                entry_body = (lesson_directory / "README.md").read_text(encoding="utf-8")
                 targets = {
-                    (DOCS / unquote(target.strip().strip("<>").split("#", 1)[0])).resolve()
-                    for target in re.findall(r"\[[^\]]*\]\(([^)]+)\)", row)
+                    (lesson_directory / unquote(target.strip().strip("<>").split("#", 1)[0])).resolve()
+                    for target in re.findall(r"\[[^\]]*\]\(([^)]+)\)", entry_body)
                 }
-                for name in ("README.md", "辅导资料.md", "实践操作手册.md", "行动卡.md"):
+                task_resource = "行动卡.md" if (lesson_directory / "行动卡.md").is_file() else "SUBMISSION.md"
+                for name in ("辅导资料.md", "实践操作手册.md", task_resource):
                     resource = (COURSES / f"L{number:02d}" / name).resolve()
-                    self.assertIn(resource, targets, f"主表缺少 L{number:02d}/{name}")
+                    self.assertIn(resource, targets, f"本讲入口缺少 L{number:02d}/{name}")
                     self.assertTrue(resource.is_file(), resource)
 
     def test_old_indexes_are_short_compatibility_links_to_the_student_entry(self) -> None:
-        for name in ("讲义阅读导航.md", "行动卡索引.md", "课件获取与本地检查.md"):
+        # The action index now provides lesson actions; only these pages remain aliases.
+        for name in ("讲义阅读导航.md", "课件获取与本地检查.md"):
             with self.subTest(index=name):
                 body = (COURSES / name).read_text(encoding="utf-8")
                 targets = re.findall(r"\[[^\]]*\]\(([^)]+)\)", body)

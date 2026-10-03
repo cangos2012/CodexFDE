@@ -10,4 +10,4 @@ latest/ 保留此前图文案例版的实际参考执行记录，不是 2026-09-
 
 三个 HTML/PNG 是原始 JSON 的可读排版，通过本地浏览器截图生成，不是原生工作台或你操作截图。页面不显示日期，原始运行时间和耗时保留在报告。index.json 保存来源、候选、检查指纹与运行摘要。product-repair.diff 显示教师注入的隔离缺陷，修复是恢复原字段。未调用 Codex 执行修复，未进行具名人审，不据此声称你已交付。
 
-本轮新增 04-execution-chain 与 05-false-green 的 .drawio 可编辑源位于 diagrams/，PNG 来自本轮 PPT 原生可编辑形状的 PowerPoint 导出。其余旧图的源仍位于教师资料。当前 Codex 实际交付与原始命令来源见 [命令复验说明](../命令复验说明.md)。
+本轮新增 04-execution-chain 与 05-false-green 的 .drawio 可编辑源位于 diagrams/，PNG 来自本轮 PPT 原生可编辑形状的 PowerPoint 导出。其余旧图的源仍位于教师资料。当前 Codex 实际交付与原始命令来源见 [命令复验说明](../reference/命令复验说明.md)。

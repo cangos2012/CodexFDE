@@ -4,7 +4,7 @@
 
 ## 提示词与再生成
 
-完整共享风格及逐页提示词见[storyboard_imagegen_26.json](../../../教师资料/L08/slides/storyboard_imagegen_26.json)，生成请求为 style + 对应 visual。第12页额外定向修改提示词：
+历史生成请求为 style + 对应 visual；原 `storyboard_imagegen_26.json` 的教师资料路径当前缺失，完整共享风格及逐页提示词待找回，不能据此声称已具备完整再生成输入。第12页保留的额外定向修改提示词：
 
 > Edit ONLY two labels in this image. Replace the left blue box text '订单A' with '明细 A'. Replace the red box text '订单B' with '明细 B'. This is two line items in ONE order, not two orders. Preserve ALL other text, layout, colors, sizes and diagram exactly.
 

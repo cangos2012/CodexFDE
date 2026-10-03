@@ -17,11 +17,10 @@ REL_NS = 'http://schemas.openxmlformats.org/package/2006/relationships'
 
 
 def local_slide_decks(number: int, courses: Path = COURSES) -> list[Path]:
-    """Inventory real packages without opening or deleting Office lock files."""
-    directory = courses / f'L{number:02d}' / 'slides'
-    if not directory.is_dir():
-        return []
-    return sorted(path for path in directory.iterdir()
+    """Inventory current packages in the lesson root and direct slides folder."""
+    lesson = courses / f'L{number:02d}'
+    return sorted(path for directory in (lesson, lesson / 'slides')
+                  if directory.is_dir() for path in directory.iterdir()
                   if path.is_file() and path.suffix.lower() == '.pptx'
                   and not path.name.startswith('~$'))
 
@@ -35,8 +34,9 @@ def local_slide_review_targets(number: int, courses: Path = COURSES) -> tuple[li
     decks = local_slide_decks(number, courses)
     available = {path.resolve(): path for path in decks}
     lesson = courses / f'L{number:02d}'
-    for source in (lesson / 'README.md', lesson / '参考详解.md',
-                   lesson / '实践操作手册.md', courses / '课程蓝图.md'):
+    for source in (lesson / 'README.md', lesson / '辅导资料.md',
+                   lesson / '实践操作手册.md', lesson / '参考详解.md',
+                   courses / '课程蓝图.md'):
         if not source.is_file():
             continue
         references = set()

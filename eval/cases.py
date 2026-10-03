@@ -235,7 +235,7 @@ def no_committed_secrets() -> str:
 
 def course_assets_present() -> str:
     root = Path(__file__).resolve().parent.parent
-    required = ["AGENTS.md", "FDE_SPEC.md", "CI_GATE_SPEC.md", "docs/courses/行动卡索引.md", "deploy/Dockerfile", "workbench_web/index.html"]
+    required = ["AGENTS.md", "FDE_SPEC.md", "CI_GATE_SPEC.md", "docs/README.md", "deploy/Dockerfile", "workbench_web/index.html"]
     missing = [item for item in required if not (root / item).exists()]
     assert not missing, f"课程资产待补齐：{missing}"
     return "关键课程资产齐备"
