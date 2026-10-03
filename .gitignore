@@ -8,8 +8,20 @@ __pycache__/
 .harness-*/
 scripts/presentations/*
 .codex-tmp/
+.codex_tmp/
+_extract_appendix/
 .tmp/
 .course*/
+
+# Course illustration generation intermediates; keep final images and editable diagrams
+/docs/courses/**/assets/**/prompts.json
+/docs/courses/**/assets/**/imagegen-prompts.json
+/docs/courses/**/assets/**/[0-9][0-9]-prompts.json
+/docs/courses/**/assets/reading-depth-*/mechanism.json
+/docs/courses/assets/advanced-concepts-*/manifest.json
+/docs/courses/**/assets/imagegen-*/*-edit-prompt.txt
+/docs/courses/**/assets/*-summary-*.prompt.txt
+/docs/courses/**/slides/assets/**/imagegen-prompts.md
 
 .l01-ppt-build/
 deliverables/

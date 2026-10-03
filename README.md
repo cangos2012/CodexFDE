@@ -18,7 +18,7 @@ python main.py
 - L05～L15：用工作台持续交付 FlowERP；每次真实交付都反过来升级 Eval、Loop、Graph、API、Web 和反馈闭环。
 - L16：从未实现的 ERP 小需求出发，现场完成一次有边界、有证据、可答辩的冷启动交付。
 
-这里有一个不能省略的自举换挡：L01～L03 工作台尚未完成，学生直接监督 Codex 开发规则、Spec 和解析能力；L04 先用 Codex 补齐 Workbench V0，再让 V0 首次以 Spec、写集、前红、Diff、后绿和人审约束 Codex 交付库存导出；L05 起由 FlowERP 现场问题推动工作台升级，再由升级后的工作台控制 Codex 修复或交付 ERP。教学顺序与各讲落点见[课程蓝图](docs/courses/课程蓝图.md)。
+这里有一个不能省略的自举换挡：L01～L03 工作台尚未完成，学生直接监督 Codex 开发规则、Spec 和解析能力；L04 先用 Codex 补齐 Workbench V0，再让 V0 首次以 Spec、写集、前红、Diff、后绿和人审约束 Codex 交付库存导出；L05 起由 FlowERP 现场问题推动工作台升级，再由升级后的工作台控制 Codex 修复或交付 ERP。学习路线与逐讲资料见[学生学习入口](docs/README.md#16-讲学习路线)。
 
 FDE 指 **Forward-Deployed Engineering**：贴近用户、数据和运行后果，通过现场循环决定做什么、交付循环约束怎样做、能力循环把重复失败沉淀为下次可复用的工作台资产。本项目不训练模型，不能把资产升级写成“模型自动进化”。
 
@@ -128,7 +128,7 @@ python -m venv .venv
 
 **课程讲义、实践材料与配图随仓库提供。** `docs/` 下的 `slides/` 文件夹、`.pptx` 和教师资料目录按 `.gitignore` 保留在本地。新克隆不包含这些课件；需要课堂 PPT 时，请从课程提供方取得匹配版本。
 
-学生从 [课程资料总入口](docs/README.md) 开始，课堂投影与复习使用 [L01～L16 独立课件](docs/courses/课件获取与本地检查.md)。对外课程名与 16 讲标题以 [课表｜Codex AI 工程交付行动营](docs/课表｜Codex AI 工程交付行动营.md) 的「主题」列为准，每讲四项内容合同以 [16 讲课程大纲](docs/课程大纲-Codex-FDE行动营-个人研发自动化工作台.md) 为准。基础较弱或尚未配置环境的学员先完成 [L00 课前准备](docs/courses/L00/L00｜课前准备：装好工具，跑通第一次环境自检.md)中的操作与自检。L00 不计入正式 16 讲，也不产生工作台或 FlowERP 产品增量。
+学生从 [课程资料总入口](docs/README.md) 开始，主线、逐讲讲义与实践、[课件获取说明](docs/README.md#课件怎样获取)在同一页。对外课程名与 16 讲标题以 [课表｜Codex AI 工程交付行动营](docs/课表｜Codex AI 工程交付行动营.md) 的「主题」列为准，每讲四项内容合同以 [16 讲课程大纲](docs/课程大纲-Codex-FDE行动营-个人研发自动化工作台.md) 为准。基础较弱或尚未配置环境的学员先完成 [L00 课前准备](docs/courses/L00/L00｜课前准备：装好工具，跑通第一次环境自检.md)中的操作与自检。L00 不计入正式 16 讲，也不产生工作台或 FlowERP 产品增量。
 
 ## 安装与启动（本仓库课程参考环境）
 
@@ -336,7 +336,7 @@ python -X utf8 -m workbench.cli course-status --require-baselines
 
 当输出中的 `baseline_semantics` 为 `progression_gate` 时，线性标签只是讲师侧的进度门闩；可构造性仍要看隔离工作区中的实际证据。
 
-16 张目标卡、命令卡和验收卡统一收录在 [行动卡索引](docs/courses/行动卡索引.md)。
+16 讲的讲义、实践手册与行动卡统一收录在 [学生学习路线](docs/README.md#16-讲学习路线)。
 
 ## 仓库地图
 
@@ -349,8 +349,8 @@ python -X utf8 -m workbench.cli course-status --require-baselines
 | [`workbench_web/`](workbench_web/) | 个人研发工作台统一界面，默认 8001，首页为唯一入口 |
 | [FlowERP `web/`](https://github.com/congde/flowERP/tree/main/web) | FlowERP 客户项目界面，默认 8000 |
 | [`harness_web/`](harness_web/) | 可选的完整 Harness 平台界面，默认 8010 |
-| [`docs/courses/slides/`](docs/courses/slides/) | 与极客时间主题逐讲对应的 16 份独立 PPT |
-| [`docs/courses/tasks/`](docs/courses/行动卡索引.md) | 16 讲目标卡、命令卡和验收卡 |
+| [各讲 `slides/` 目录](docs/README.md#课件怎样获取) | 课堂 PPT 本地存放位置，不随 Git 发布 |
+| [逐讲行动卡](docs/README.md#16-讲学习路线) | 目标与提交核对，详细操作按本讲实践手册 |
 | [`docs/courses/`](docs/courses/) | L00～L16 学生讲义、课程蓝图、任务卡与实验 |
 | [`docs/reference/`](docs/reference/) | 工作台、FlowERP 领域与运行边界参考资料 |
 | [`deploy/`](deploy/) | 容器化、运行与回滚资料 |
@@ -562,7 +562,8 @@ python -X utf8 -m workbench.harness_cli serve-web --port 8090
 | 工作台研发能力与入口约定（本地资料） | [当前边界](docs/reference/daily-development.md) |
 | 对外课表与 16 讲主题 | [课表｜Codex AI 工程交付行动营](docs/课表｜Codex AI 工程交付行动营.md) |
 | 16 讲唯一课程合同 | [课程大纲](docs/课程大纲-Codex-FDE行动营-个人研发自动化工作台.md) |
-| 学生学习路线与逐页课件安排 | [课程蓝图](docs/courses/课程蓝图.md) |
+| 学生学习路线与逐讲资料 | [统一学习入口](docs/README.md) |
+| 教师教学设计与课件检查 | [课程蓝图](docs/courses/课程蓝图.md) |
 | 个人工作台的产品边界 | [个人 AI 研发工作台](docs/reference/个人AI研发工作台.md) |
 | FlowERP 领域口径 | [领域模型与业务不变量](docs/reference/FlowERP领域模型与业务不变量.md) |
 | API、Web 与冷启动 | [接口与运行边界](docs/reference/FlowERP接口与运行边界.md) |

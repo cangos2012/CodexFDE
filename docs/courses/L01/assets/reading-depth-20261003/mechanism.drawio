@@ -1,0 +1,50 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="drawio" version="26.0.0">
+  <diagram id="L01" name="红绿之间保住验收标准">
+    <mxGraphModel grid="1" gridSize="10" page="1" pageScale="1" pageWidth="1500" pageHeight="880" background="#ffffff">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="heading" value="L01｜红绿之间保住验收标准" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontColor=#17252b;spacing=0;fontSize=32;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="30" width="1420" height="55" />
+        </mxCell>
+        <mxCell id="question" value="同一条测试命令，为什么可能不再验证原要求？" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontColor=#17252b;spacing=0;fontSize=23;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="100" width="1420" height="45" />
+        </mxCell>
+        <mxCell id="step-0" value="&lt;b&gt;01 签署原要求&lt;/b&gt;&lt;br&gt;&lt;br&gt;任务 A 重启后查回原需求&lt;br&gt;与失败记录。" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;fontFamily=Microsoft YaHei;fontColor=#17252b;fontSize=22;spacing=18;strokeWidth=2;fillColor=#edf5fa;strokeColor=#517b94;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="190" width="310" height="240" />
+        </mxCell>
+        <mxCell id="step-1" value="&lt;b&gt;02 固定确认测试&lt;/b&gt;&lt;br&gt;&lt;br&gt;保存原测试副本和内容标识，&lt;br&gt;核对实际断言。" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;fontFamily=Microsoft YaHei;fontColor=#17252b;fontSize=22;spacing=18;strokeWidth=2;fillColor=#edf5fa;strokeColor=#517b94;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="410" y="190" width="310" height="240" />
+        </mxCell>
+        <mxCell id="edge-1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#517b94;strokeWidth=2;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="step-0" target="step-1">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="step-2" value="&lt;b&gt;03 取得有效红灯&lt;/b&gt;&lt;br&gt;&lt;br&gt;同一测试确实运行，失败来&lt;br&gt;自保存或读回能力缺失。" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;fontFamily=Microsoft YaHei;fontColor=#17252b;fontSize=22;spacing=18;strokeWidth=2;fillColor=#edf5fa;strokeColor=#517b94;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="780" y="190" width="310" height="240" />
+        </mxCell>
+        <mxCell id="edge-2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#517b94;strokeWidth=2;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="step-1" target="step-2">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="step-3" value="&lt;b&gt;04 同标准复验&lt;/b&gt;&lt;br&gt;&lt;br&gt;实现后比较测试版本、断言、&lt;br&gt;发现范围与跳过条件。" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;fontFamily=Microsoft YaHei;fontColor=#17252b;fontSize=22;spacing=18;strokeWidth=2;fillColor=#edf5fa;strokeColor=#517b94;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1150" y="190" width="310" height="240" />
+        </mxCell>
+        <mxCell id="edge-3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#517b94;strokeWidth=2;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="step-2" target="step-3">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="counterexample" value="&lt;b&gt;命令没变，断言变弱&lt;/b&gt;&lt;br&gt;&lt;br&gt;改为只检查文件存在也会绿，却不能证明重启查回。" style="rounded=0;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontFamily=Microsoft YaHei;fontColor=#17252b;fontSize=23;spacing=20;strokeWidth=2;fillColor=#fff0ef;strokeColor=#b7625b;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="500" width="680" height="180" />
+        </mxCell>
+        <mxCell id="judgment" value="&lt;b&gt;绿灯支持原要求吗&lt;/b&gt;&lt;br&gt;&lt;br&gt;同标准绿灯加范围内 Diff，仍由人核对后决定。" style="rounded=0;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontFamily=Microsoft YaHei;fontColor=#17252b;fontSize=23;spacing=20;strokeWidth=2;fillColor=#eef7f1;strokeColor=#56846a;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="780" y="500" width="680" height="180" />
+        </mxCell>
+        <mxCell id="transfer" value="&lt;b&gt;迁移到文档校对&lt;/b&gt;　锁定校对依据与范围，不能换成只检查文档能打开。" style="rounded=0;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontFamily=Microsoft YaHei;fontColor=#17252b;fontSize=23;spacing=20;strokeWidth=2;fillColor=#f5f5f5;strokeColor=#788186;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="740" width="1420" height="95" />
+        </mxCell>
+        <mxCell id="legend" value="蓝色：机制步骤　　红色：错误推断或反例　　绿色：判断条件　　灰色：迁移　｜　教学示意" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontColor=#17252b;spacing=0;fontSize=18;fontColor=#526168;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="850" width="1420" height="35" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
