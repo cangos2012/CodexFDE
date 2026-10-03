@@ -1,0 +1,109 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="drawio" version="31.4.4">
+  <diagram id="candidate-report-identity" name="候选与报告怎样保持对应">
+    <mxGraphModel dx="1300" dy="1300" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1300" pageHeight="1300" math="0" shadow="0" background="#ffffff">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="&lt;b&gt;同一份候选，怎样对应检查、接受与集成&lt;/b&gt;" style="text;whiteSpace=wrap;html=1;strokeColor=none;fillColor=none;fontFamily=Microsoft YaHei;fontSize=30;fontColor=#243746;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="20" width="1180" height="55" />
+        </mxCell>
+        <mxCell id="3" value="A 是本事项的源码起点；B 是隔离副本。每一步都要核对依据是否仍然有效。" style="text;whiteSpace=wrap;html=1;strokeColor=none;fillColor=none;fontFamily=Microsoft YaHei;fontSize=21;fontColor=#243746;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="85" width="1180" height="40" />
+        </mxCell>
+        <mxCell id="4" value="&lt;b&gt;原项目源码 A&lt;/b&gt;&lt;br&gt;记录本事项起点&lt;br&gt;保留受控源码清单" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=20;fontColor=#172b4d;spacing=12;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="160" width="300" height="130" />
+        </mxCell>
+        <mxCell id="5" value="&lt;b&gt;复制隔离候选 B&lt;/b&gt;&lt;br&gt;从 A 建立源码副本&lt;br&gt;原项目先保持原状" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=20;fontColor=#172b4d;spacing=12;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="460" y="160" width="300" height="130" />
+        </mxCell>
+        <mxCell id="6" value="&lt;b&gt;Codex 修改候选 B&lt;/b&gt;&lt;br&gt;按本轮授权范围实现&lt;br&gt;保留实际变化与补丁" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=20;fontColor=#172b4d;spacing=12;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="880" y="160" width="300" height="130" />
+        </mxCell>
+        <mxCell id="7" value="&lt;b&gt;① 在 B 中运行检查&lt;/b&gt;&lt;br&gt;读取 B 的真实源码&lt;br&gt;核对检查期间源码未变&lt;br&gt;保存退出码与分项结果" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=20;fontColor=#172b4d;spacing=12;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="880" y="430" width="300" height="160" />
+        </mxCell>
+        <mxCell id="8" value="&lt;b&gt;报告关联 B 的内容指纹&lt;/b&gt;&lt;br&gt;保存报告文件哈希&lt;br&gt;指向本次检查的候选&lt;br&gt;通过结果进入人审" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=20;fontColor=#172b4d;spacing=12;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="460" y="430" width="300" height="160" />
+        </mxCell>
+        <mxCell id="9" value="&lt;b&gt;② 人接受候选 B&lt;/b&gt;&lt;br&gt;核对 B 仍是检查时内容&lt;br&gt;核对报告文件未变&lt;br&gt;记录具名决定" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=20;fontColor=#172b4d;spacing=12;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="430" width="300" height="160" />
+        </mxCell>
+        <mxCell id="10" value="&lt;b&gt;③ 另行集成前核对&lt;/b&gt;&lt;br&gt;B 仍是接受时内容&lt;br&gt;原项目仍是起点 A&lt;br&gt;累计改动仍在授权范围" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=20;fontColor=#172b4d;spacing=12;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="740" width="300" height="160" />
+        </mxCell>
+        <mxCell id="11" value="&lt;b&gt;核对通过，再确认写回&lt;/b&gt;&lt;br&gt;把接受过的候选集成到原项目&lt;br&gt;保留补丁与集成记录&lt;br&gt;Git 提交、部署继续办理" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=20;fontColor=#172b4d;spacing=12;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="460" y="740" width="300" height="160" />
+        </mxCell>
+        <mxCell id="12" value="&lt;b&gt;检查后 B 又改动&lt;/b&gt;&lt;br&gt;旧报告失效，不能据此接受&lt;br&gt;保留旧结果，重新检查" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=20;fontColor=#172b4d;spacing=12;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="880" y="740" width="300" height="160" />
+        </mxCell>
+        <mxCell id="13" value="&lt;b&gt;原项目 A 已变化&lt;/b&gt;&lt;br&gt;停止集成，保留候选&lt;br&gt;人工核对起点与冲突" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=20;fontColor=#172b4d;spacing=12;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="1060" width="300" height="120" />
+        </mxCell>
+        <mxCell id="14" value="复制本轮源码" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#526d82;fontFamily=Microsoft YaHei;fontSize=17;fontColor=#243746;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="4" target="5">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="15" value="限定写集" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#526d82;fontFamily=Microsoft YaHei;fontSize=17;fontColor=#243746;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="5" target="6">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="16" value="修改完成后运行" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#526d82;fontFamily=Microsoft YaHei;fontSize=17;fontColor=#243746;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="6" target="7">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="17" value="绑定内容指纹" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#526d82;fontFamily=Microsoft YaHei;fontSize=17;fontColor=#243746;labelBackgroundColor=#ffffff;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="7" target="8">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="18" value="提交当前证据" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#526d82;fontFamily=Microsoft YaHei;fontSize=17;fontColor=#243746;labelBackgroundColor=#ffffff;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="8" target="9">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="19" value="接受后&lt;br&gt;另行申请" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#526d82;fontFamily=Microsoft YaHei;fontSize=17;fontColor=#243746;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="9" target="10">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="20" value="核对通过" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#526d82;fontFamily=Microsoft YaHei;fontSize=17;fontColor=#243746;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="10" target="11">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="21" value="检查后再改 B" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#b85450;fontFamily=Microsoft YaHei;fontSize=17;fontColor=#243746;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="7" target="12">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="22" value="重新检查" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#b85450;fontFamily=Microsoft YaHei;fontSize=17;fontColor=#243746;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;dashed=1;dashPattern=6 4;" edge="1" parent="1" source="12" target="7">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="1240" y="820" />
+              <mxPoint x="1240" y="510" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="23" value="发现原项目变化" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#b85450;fontFamily=Microsoft YaHei;fontSize=17;fontColor=#243746;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="10" target="13">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="24" value="" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=15;fontColor=#172b4d;spacing=12;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="460" y="1040" width="30" height="30" />
+        </mxCell>
+        <mxCell id="25" value="源码与受控操作" style="text;whiteSpace=wrap;html=1;strokeColor=none;fillColor=none;fontFamily=Microsoft YaHei;fontSize=19;fontColor=#243746;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="505" y="1040" width="300" height="30" />
+        </mxCell>
+        <mxCell id="26" value="" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=15;fontColor=#172b4d;spacing=12;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="860" y="1040" width="30" height="30" />
+        </mxCell>
+        <mxCell id="27" value="检查与关联证据" style="text;whiteSpace=wrap;html=1;strokeColor=none;fillColor=none;fontFamily=Microsoft YaHei;fontSize=19;fontColor=#243746;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="905" y="1040" width="300" height="30" />
+        </mxCell>
+        <mxCell id="28" value="" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=15;fontColor=#172b4d;spacing=12;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="460" y="1110" width="30" height="30" />
+        </mxCell>
+        <mxCell id="29" value="人的决定与核对" style="text;whiteSpace=wrap;html=1;strokeColor=none;fillColor=none;fontFamily=Microsoft YaHei;fontSize=19;fontColor=#243746;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="505" y="1110" width="300" height="30" />
+        </mxCell>
+        <mxCell id="30" value="" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=15;fontColor=#172b4d;spacing=12;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="860" y="1110" width="30" height="30" />
+        </mxCell>
+        <mxCell id="31" value="变化后的失效或停止" style="text;whiteSpace=wrap;html=1;strokeColor=none;fillColor=none;fontFamily=Microsoft YaHei;fontSize=19;fontColor=#243746;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="905" y="1110" width="300" height="30" />
+        </mxCell>
+        <mxCell id="32" value="关系示意，实际状态以本轮记录为准。检查通过、人接受、集成写回分别判断。" style="text;whiteSpace=wrap;html=1;strokeColor=none;fillColor=none;fontFamily=Microsoft YaHei;fontSize=20;fontColor=#243746;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="1220" width="1180" height="40" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
