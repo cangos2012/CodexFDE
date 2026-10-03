@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
+from workbench.file_io import open_read
 from workbench.maintenance import MaintenanceBusy, MaintenanceGate, runtime_write_guard
 from workbench.runtime_lease import WorkbenchRuntimeInUse, WorkbenchRuntimeLease
 from workbench.task_store import TaskStore
@@ -54,7 +55,7 @@ class WorkbenchBackupTests(unittest.TestCase):
         verified = verify_backup(archive)
         self.assertTrue(verified['ok'])
         self.assertGreater(verified['files_verified'], 2)
-        with zipfile.ZipFile(archive) as bundle:
+        with open_read(archive, 'rb') as archive_stream, zipfile.ZipFile(archive_stream) as bundle:
             self.assertNotIn('payload/daily-delivery/plan/workspace/.env', bundle.namelist())
             manifest = json.loads(bundle.read('manifest.json'))
             self.assertTrue(any(row['path'] == str(external) for row in manifest['external_dependencies']))
@@ -142,7 +143,7 @@ class WorkbenchBackupTests(unittest.TestCase):
 
     def test_corrupt_hash_and_path_traversal_are_rejected(self):
         _, archive = self.archived()
-        with zipfile.ZipFile(archive) as bundle:
+        with open_read(archive, 'rb') as archive_stream, zipfile.ZipFile(archive_stream) as bundle:
             content = {name: bundle.read(name) for name in bundle.namelist()}
         manifest = json.loads(content['manifest.json'])
         manifest['files']['reports/failure.json']['sha256'] = '0' * 64
@@ -177,7 +178,7 @@ class WorkbenchBackupTests(unittest.TestCase):
         _, archive = self.archived()
         result = verify_backup(archive)
         self.assertIn(str(missing), result['missing_external_dependencies'])
-        with zipfile.ZipFile(archive) as bundle:
+        with open_read(archive, 'rb') as archive_stream, zipfile.ZipFile(archive_stream) as bundle:
             self.assertEqual(('gitdir: ' + str(missing)).encode(), bundle.read('payload/course-worktrees/TASK-OTHER/.git'))
 
     def test_restore_copy_failure_keeps_partial_database_unavailable(self):
@@ -224,7 +225,7 @@ class WorkbenchBackupTests(unittest.TestCase):
                        ('source-fixture', json.dumps({'source': {'report': {'path': str(report), 'sha256': sha}}})))
         _, archive = self.archived()
         self.assertTrue(verify_backup(archive)['ok'])
-        with zipfile.ZipFile(archive) as bundle:
+        with open_read(archive, 'rb') as archive_stream, zipfile.ZipFile(archive_stream) as bundle:
             content = {name: bundle.read(name) for name in bundle.namelist()}
         manifest = json.loads(content['manifest.json'])
         corrupted = b'{"decision":"changed after recorded acceptance"}'
@@ -256,7 +257,7 @@ class WorkbenchBackupTests(unittest.TestCase):
         self.store.append_event('TASK-ABCD123456', 'customer data ownership',
                                 evidence={'customer_database': str(customer), 'preview_runtime': str(preview)})
         _, archive = self.archived()
-        with zipfile.ZipFile(archive) as bundle:
+        with open_read(archive, 'rb') as archive_stream, zipfile.ZipFile(archive_stream) as bundle:
             manifest = json.loads(bundle.read('manifest.json'))
             self.assertNotIn('payload/daily-delivery/plan/workspace/flowerp.db', bundle.namelist())
             self.assertTrue(any(row.get('ownership') == 'other_database_not_restored' and row['path'] == str(customer)
@@ -279,7 +280,7 @@ class WorkbenchBackupTests(unittest.TestCase):
         empty.mkdir(parents=True)
         self.store.append_event('TASK-ABCD123456', 'empty attempt retained', evidence={'path': str(empty)})
         _, archive = self.archived()
-        with zipfile.ZipFile(archive) as bundle:
+        with open_read(archive, 'rb') as archive_stream, zipfile.ZipFile(archive_stream) as bundle:
             manifest = json.loads(bundle.read('manifest.json'))
         self.assertIn('initiative-research/empty-attempt', manifest['directories'])
         for iteration in range(2):
@@ -291,7 +292,7 @@ class WorkbenchBackupTests(unittest.TestCase):
 
     def test_verify_and_restore_rederive_internal_references_from_database(self):
         _, archive = self.archived()
-        with zipfile.ZipFile(archive) as bundle:
+        with open_read(archive, 'rb') as archive_stream, zipfile.ZipFile(archive_stream) as bundle:
             content = {name: bundle.read(name) for name in bundle.namelist()}
         manifest = json.loads(content['manifest.json'])
         del content['payload/reports/failure.json']
@@ -311,7 +312,7 @@ class WorkbenchBackupTests(unittest.TestCase):
 
     def test_unsafe_directory_metadata_is_rejected(self):
         _, archive = self.archived()
-        with zipfile.ZipFile(archive) as bundle:
+        with open_read(archive, 'rb') as archive_stream, zipfile.ZipFile(archive_stream) as bundle:
             content = {name: bundle.read(name) for name in bundle.namelist()}
         manifest = json.loads(content['manifest.json'])
         manifest['directories'].append('../escape')

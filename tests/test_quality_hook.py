@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from workbench import quality_hook as hook
+from workbench.file_io import read_text
 
 
 class QualityHookTests(unittest.TestCase):
@@ -25,7 +26,7 @@ class QualityHookTests(unittest.TestCase):
                         'eval_command': [sys.executable, 'check.py']}
         self.package = hook.prepare(self.runtime, self.candidate, self.project, 'TASK-test', 'INIT-test', 'tester')
         self.folder = Path(self.package['path'])
-        self.binding = json.loads((self.folder / 'binding.json').read_text(encoding='utf-8'))
+        self.binding = json.loads(read_text(self.folder / 'binding.json'))
 
     def event(self, **kw):
         return dict(hook_event_name='Stop', cwd=str(self.candidate), stop_hook_active=False, **kw)
@@ -49,7 +50,7 @@ class QualityHookTests(unittest.TestCase):
     def test_install_match_does_not_claim_trust_and_preserves_other_rules(self):
         self.install_fixture()
         config_path = self.candidate / '.codex/hooks.json'
-        config = json.loads(config_path.read_text(encoding='utf-8'))
+        config = json.loads(read_text(config_path))
         config['hooks']['Stop'].append({'hooks': [{'type': 'command', 'command': 'another rule'}]})
         hook.write_json(config_path, config)
         view = hook.view(self.package, self.candidate, 'TASK-test')
@@ -128,4 +129,4 @@ class QualityHookTests(unittest.TestCase):
         self.assertEqual('unverified', record['outcome'])
         receipts = list((self.runtime / 'project-reports/TASK-test').glob('*/process.json'))
         self.assertEqual(1, len(receipts))
-        self.assertNotEqual(0, json.loads(receipts[0].read_text(encoding='utf-8'))['returncode'])
+        self.assertNotEqual(0, json.loads(read_text(receipts[0]))['returncode'])

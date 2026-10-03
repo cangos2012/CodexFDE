@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from eval.harness import run_suite
+from workbench.file_io import read_text
 from .repair import build_repair_task
 
 
@@ -28,7 +29,7 @@ class DeliveryState:
 
 
 def _load_state(path: Path) -> DeliveryState:
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(read_text(path, encoding="utf-8"))
     return DeliveryState(
         state=str(data.get("status", data.get("state", "develop"))),
         round_no=int(data.get("rounds", data.get("round_no", 0))),

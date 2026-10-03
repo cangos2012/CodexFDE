@@ -9,6 +9,7 @@ from eval.harness import EVALS
 from .course_snapshot import source_paths, _git
 from .course_workspace import LessonSubprocessEvalRunner
 from .execution import CodexExecutionRunner, normalize_write_scope
+from .file_io import read_bytes
 from .spec import parse_spec
 from .workflow import run_task
 
@@ -22,7 +23,7 @@ def snapshot_paths(root, runtime):
 
 def manifest(repository, runtime):
     root = Path(repository).resolve()
-    return {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+    return {p.relative_to(root).as_posix(): hashlib.sha256(read_bytes(p)).hexdigest()
             for p in snapshot_paths(root, Path(runtime).resolve())}
 
 
@@ -85,11 +86,11 @@ def submit_daily(repository, runtime, tasks, plan, on_task_created, *, runner_fa
     if learning:
         learning.attach(binding_id, task['id'])
     tasks.append_event(task['id'], '本次需求 Spec 已冻结', actor=plan['actor'],
-                       evidence={'sha256': hashlib.sha256(spec_path.read_bytes()).hexdigest()})
+                       evidence={'sha256': hashlib.sha256(read_bytes(spec_path)).hexdigest()})
     workspace = folder / 'workspace'
     workspace.mkdir()
     for relative, digest in plan['source_manifest'].items():
-        content = (Path(repository) / relative).read_bytes()
+        content = read_bytes(Path(repository) / relative)
         if hashlib.sha256(content).hexdigest() != digest:
             raise ValueError('复制期间源码变化，请重新准备方案')
         target = workspace / relative

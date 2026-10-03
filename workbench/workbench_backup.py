@@ -15,6 +15,7 @@ import zipfile
 
 from .maintenance import MaintenanceGate, MaintenanceBusy
 from .runtime_lease import WorkbenchRuntimeLease
+from .file_io import open_read, read_text
 
 
 SCHEMA = 'workbench.backup/v1'
@@ -34,7 +35,7 @@ def _json(value):
 
 def _hash(path):
     digest = hashlib.sha256()
-    with Path(path).open('rb') as stream:
+    with open_read(path, 'rb') as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b''):
             digest.update(block)
     return digest.hexdigest()
@@ -116,7 +117,7 @@ def _paths(runtime):
                     continue
                 files[relative] = {'sha256': _hash(path), 'size': path.stat().st_size}
                 if name == '.git' and path.is_file():
-                    text = path.read_text(encoding='utf-8').strip()
+                    text = read_text(path, encoding='utf-8').strip()
                     if text.startswith('gitdir:'):
                         external = (path.parent / text[7:].strip()).resolve()
                         dependencies.append({'kind': 'git_worktree_registration', 'path': str(external),
@@ -247,7 +248,7 @@ def _checked_archive(archive, destination):
 
 def _read_checked_archive(archive, destination):
     archive = Path(archive).resolve()
-    with zipfile.ZipFile(archive) as bundle:
+    with open_read(archive, 'rb') as archive_stream, zipfile.ZipFile(archive_stream) as bundle:
         names = bundle.namelist()
         if len(names) != len(set(names)) or 'manifest.json' not in names or len(names) > MAX_FILES + 2:
             raise ValueError('备份目录重复、缺少清单或文件数量过大')
@@ -366,7 +367,7 @@ class BackupService:
 
     def get(self, identifier):
         path = self.archive_path(identifier)
-        with zipfile.ZipFile(path) as bundle:
+        with open_read(path, 'rb') as archive_stream, zipfile.ZipFile(archive_stream) as bundle:
             manifest = json.loads(bundle.read('manifest.json'))
         return {key: manifest[key] for key in ('id', 'created_at', 'actor', 'runtime_root', 'boundary', 'warnings')} | {
             'file_count': len(manifest['files']), 'archive_bytes': path.stat().st_size,

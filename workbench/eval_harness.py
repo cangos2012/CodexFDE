@@ -3,6 +3,8 @@ import hashlib
 import json
 from pathlib import Path
 
+from .file_io import read_bytes
+
 
 def fingerprint(files):
     return hashlib.sha256(json.dumps(files, sort_keys=True).encode('utf-8')).hexdigest()
@@ -52,7 +54,7 @@ def report_view(report, workspace, runtime):
         try:
             current = fingerprint(manifest(workspace, runtime))
             path = Path(runtime) / report['report_path'] if report.get('report_path') else Path(runner['report_path'])
-            valid_file = hashlib.sha256(path.read_bytes()).hexdigest() == report.get('report_sha256')
+            valid_file = hashlib.sha256(read_bytes(path)).hexdigest() == report.get('report_sha256')
             view['freshness'] = 'current' if current == runner['candidate_sha256'] and valid_file else 'stale'
         except (OSError, ValueError, KeyError):
             view['freshness'] = 'unavailable'

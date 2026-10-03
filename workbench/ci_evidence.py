@@ -7,12 +7,14 @@ import os
 import sys
 from pathlib import Path
 
+from .file_io import read_bytes
+
 
 def build_envelope(report_path: str | Path, *, env: dict[str, str] | None = None) -> dict:
     report_file = Path(report_path)
     if not report_file.is_file():
         raise FileNotFoundError(f"Harness 报告不存在：{report_file}")
-    raw = report_file.read_bytes()
+    raw = read_bytes(report_file)
     report = json.loads(raw.decode("utf-8"))
     environ = env if env is not None else os.environ
     sha = str(environ.get("GITHUB_SHA") or "").strip()

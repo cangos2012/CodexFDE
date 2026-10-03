@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from agent.schedule import Subtask, assert_parallel_safe
+from .file_io import read_text
 
 
 _STATES = {"planned", "running", "completed", "failed"}
@@ -16,7 +17,7 @@ def _now() -> str:
 
 
 def _read_json(path: Path) -> dict:
-    value = json.loads(path.read_text(encoding="utf-8"))
+    value = json.loads(read_text(path, encoding="utf-8"))
     if not isinstance(value, dict):
         raise ValueError("SubAgent 清单必须是 JSON 对象")
     return value

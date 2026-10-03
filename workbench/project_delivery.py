@@ -5,6 +5,7 @@ import secrets
 import subprocess
 
 from .execution import _is_sensitive_path
+from .file_io import read_bytes, read_text
 
 
 def project_source_paths(root, runtime):
@@ -55,7 +56,7 @@ class CandidateProjectEval:
         if result.returncode in {124, 127, 130}:
             reason = {124: '项目 Eval 超时', 127: '项目 Eval 命令无法启动', 130: '项目 Eval 已取消'}[result.returncode]
             raise RuntimeError(reason + '，未完成验证；进程记录：' + str(folder / 'process.json'))
-        report = json.loads(report_path.read_text(encoding='utf-8') if report_path.exists() else result.stdout)
+        report = json.loads(read_text(report_path) if report_path.exists() else result.stdout)
         # Preserve the exact received report even when validation rejects it.
         (folder / 'raw-report.json').write_text(json.dumps(report, ensure_ascii=False), encoding='utf-8')
         validate_project_report(report, result.returncode)
@@ -65,6 +66,10 @@ class CandidateProjectEval:
                             'validated': True, 'label': self.label, 'report_path': str(report_path),
                             'candidate_sha256': fingerprint(before), 'command': command,
                             'process_path': str(folder / 'process.json')}
-        report_path.write_text(json.dumps(report, ensure_ascii=False), encoding='utf-8')
-        report['report_sha256'] = hashlib.sha256(report_path.read_bytes()).hexdigest()
+        serialized = json.dumps(report, ensure_ascii=False)
+        report_path.write_text(serialized, encoding='utf-8')
+        persisted = read_bytes(report_path)
+        if persisted != serialized.encode('utf-8'):
+            raise RuntimeError('项目 Eval 报告写入后变化，结果不可用于验收')
+        report['report_sha256'] = hashlib.sha256(persisted).hexdigest()
         return report
