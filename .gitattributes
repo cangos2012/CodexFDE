@@ -1,0 +1,2 @@
+# Keep the macOS course session helper executable by zsh after checkout.
+*.zsh text eol=lf

@@ -6,7 +6,25 @@
 
 在仓库根目录运行以下命令。需要本机 Docker 引擎和 Compose 可用。首次实验使用新的 Compose 项目名与空数据卷；保留旧项目和失败证据，不用删除旧数据库制造“冷启动”。默认端口 8000、8001 必须空闲；已有服务仍在处理任务时不能直接结束它。
 
+先在本次终端设置客户构建来源，两种仓库各自保存业务与工作台代码。
+
+Windows（PowerShell）：
+
 ```powershell
+$env:FLOWERP_PROJECT_ROOT = (Read-Host '独立 FlowERP 仓库绝对路径').Trim().Trim('"')
+```
+
+macOS（zsh）：
+
+```zsh
+printf '独立 FlowERP 仓库绝对路径（不加引号）：\n'
+read -r FLOWERP_PROJECT_ROOT
+export FLOWERP_PROJECT_ROOT
+```
+
+下方 Docker 命令两种终端通用。逐条执行，确认成功再继续；检查退出码时，PowerShell 紧接命令运行 `$LASTEXITCODE`，zsh 紧接命令运行 `echo $?`。Mac 使用自己的 Docker 环境即可，不需要安装 PowerShell。
+
+```text
 docker compose version
 docker info
 docker compose -p flowerp-l16-trial -f deploy/docker-compose.yml config --quiet
@@ -26,21 +44,59 @@ docker compose -p flowerp-l16-trial -f deploy/docker-compose.yml ps
 
 首次空库需要初始化 FlowERP 组织和管理员；在交互终端执行，按提示输入密码，不把密码写入命令或实验记录：
 
-```powershell
+```text
 docker compose -p flowerp-l16-trial -f deploy/docker-compose.yml exec flowerp python -X utf8 -m flowerp init --organization FlowERP --username admin
 ```
 
 ## 两个页面都必须验收
 
+Windows（PowerShell）：
+
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/api/v1/health/ready
 Invoke-RestMethod http://127.0.0.1:8001/api/health
+```
+
+macOS（zsh）：
+
+```zsh
+curl --noproxy '*' --fail --silent --show-error http://127.0.0.1:8000/api/v1/health/ready
+echo $?
+curl --noproxy '*' --fail --silent --show-error http://127.0.0.1:8001/api/health
+echo $?
+```
+
+正常响应应为成功状态，命令退出码为 0。非零时先保存错误，再查容器状态与日志。
+
+两种终端通用：
+
+```text
 docker compose -p flowerp-l16-trial -f deploy/docker-compose.yml logs --no-color
 ```
 
 健康接口只证明服务响应与其检查项。还要在浏览器登录 FlowERP，完成本次需求的实际操作并核对业务结果；打开工作台，确认事项与任务入口可用、客户项目链接正确、原始证据可查。保留镜像 ID、项目名、初始化与启动记录、失败日志、实际业务对账和具名结论，再写入发布证据索引。
 
 如果调整 `FLOWERP_PORT`，还要同步设置 `FLOWERP_ALLOWED_ORIGINS` 为实际访问来源；`WORKBENCH_PORT` 调整工作台端口。浏览器中的 FlowERP 链接使用宿主机地址，不能填写容器服务名。端口配置不是身份认证。
+
+例如本次实验改用 8100、8101 时，在启动前设置：
+
+Windows（PowerShell）：
+
+```powershell
+$env:FLOWERP_PORT = '8100'
+$env:WORKBENCH_PORT = '8101'
+$env:FLOWERP_ALLOWED_ORIGINS = 'http://127.0.0.1:8100,http://localhost:8100'
+```
+
+macOS（zsh）：
+
+```zsh
+export FLOWERP_PORT=8100
+export WORKBENCH_PORT=8101
+export FLOWERP_ALLOWED_ORIGINS='http://127.0.0.1:8100,http://localhost:8100'
+```
+
+健康探测和浏览器地址也改为相同端口。新终端不会继承上一窗口的设置，续做时需重新设置并沿用原 Compose 项目名。
 
 ## 容器启动与现场代码交付的边界
 

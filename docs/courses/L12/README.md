@@ -6,6 +6,8 @@
 
 **开始前准备：** 自己的工作台候选与采购环境。
 
+Windows PowerShell 与 macOS zsh 按[实践手册](实践操作手册.md)各自的准备命令操作。通用 Python 命令先激活原项目 `.venv`；候选复验使用手册记录的控制解释器，并核对源码来自候选。
+
 | 顺序 | 打开什么 | 现在做什么，做到哪里再继续 |
 |---|---|---|
 | 1. 看懂本讲任务 | [辅导资料](辅导资料.md) | 先读开头的案例或总览，写下本讲要解决的问题；原理随实践回查 |
@@ -66,7 +68,9 @@
 
 在项目根目录激活 `.venv` 后运行：
 
-```bash
+**Windows / macOS 通用：**
+
+```text
 python -X utf8 docs/courses/L12/examples/graph_control_lab.py wait
 ```
 
@@ -94,7 +98,11 @@ python -X utf8 docs/courses/L12/examples/graph_control_lab.py wait
 
 ### 采购审批与入库实验
 
-```bash
+在控制仓库根目录、已激活其 `.venv` 的操作终端运行。先完成手册中的独立客户环境检查。
+
+**Windows / macOS 通用：**
+
+```text
 python -X utf8 docs/courses/L12/examples/purchase_approval_lab.py approved --report-path .runtime/l12-first/approved.json
 ```
 

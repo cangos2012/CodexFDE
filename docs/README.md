@@ -17,6 +17,10 @@
 5. 课堂学习或复习时打开 [L01～L16 独立课件](./courses/课件获取与本地检查.md)。
 6. 用 VS Code 打开 [课程工作区](./courses/FlowERP-AI研发工作台.code-workspace)，再按讲义和任务卡跟跑。
 
+**Mac 同学：**L00～L16 支持 macOS 默认终端 zsh。安装从 L00 开始，后续手册每步选择“macOS（zsh）”代码块；纯 Python、Git 通用命令两端相同。新开终端、沿用 L01 隔离区或路径含空格时，先看 [macOS 环境与路径约定](./reference/实操手册执行与排错.md#macos-zsh)。
+
+各讲命令覆盖、补齐项目与实际验证范围见 [L00～L16 macOS 逐讲检查](./reference/macOS逐讲检查-2026-10-03.md)。
+
 ## 16 讲学习路线
 
 先读 [课程蓝图中的 L01～L12 学习路线](courses/课程蓝图.md#l01l12-的连续学习路线)，看清每讲为什么接着做、上一讲的成果怎样继续使用，再进入各讲辅导资料。
@@ -56,12 +60,25 @@ L01 从[本讲 README：阅读顺序与提交说明](./courses/L01/README.md)开
 
 在仓库根目录使用项目虚拟环境：
 
+Windows（PowerShell）：
+
 ```powershell
 .\.venv\Scripts\python.exe -X utf8 -m workbench.cli course-status
 .\.venv\Scripts\python.exe -X utf8 -m workbench.cli course-contract --lesson 4
 .\.venv\Scripts\python.exe -X utf8 -m workbench.cli serve-workbench
 .\.venv\Scripts\python.exe -X utf8 -m workbench.cli serve
 ```
+
+macOS（zsh）：
+
+```zsh
+./.venv/bin/python -X utf8 -m workbench.cli course-status
+./.venv/bin/python -X utf8 -m workbench.cli course-contract --lesson 4
+./.venv/bin/python -X utf8 -m workbench.cli serve-workbench
+./.venv/bin/python -X utf8 -m workbench.cli serve
+```
+
+服务会占用当前终端窗口；先按本讲要求启动工作台，需要客户服务时在另一个终端运行 `serve`。运行前在各自终端设置真实的 `FLOWERP_PROJECT_ROOT` 并通过客户环境检查。
 
 - `:8001` 是个人研发自动化工作台。
 - `:8000` 是客户项目 FlowERP。

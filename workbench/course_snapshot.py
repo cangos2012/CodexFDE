@@ -18,9 +18,9 @@ from .lesson_constructibility import apply_student_start
 
 SOURCE_DIRS = {".codex", ".github", "agent", "deploy", "docs", "eval", "harness_web",
                "scripts", "tests", "workbench", "workbench_web"}
-ROOT_FILES = {"AGENTS.md", "FDE_SPEC.md", "CI_GATE_SPEC.md", "README.md", "pyproject.toml", "main.py", ".gitignore", "首次使用.cmd", "打开工作台.cmd"}
+ROOT_FILES = {"AGENTS.md", "FDE_SPEC.md", "CI_GATE_SPEC.md", "README.md", "pyproject.toml", "main.py", ".gitignore", ".gitattributes", "首次使用.cmd", "打开工作台.cmd"}
 TEXT_SUFFIXES = {".py", ".md", ".json", ".toml", ".yaml", ".yml", ".js", ".mjs", ".html", ".css",
-                 ".txt", ".sh", ".ps1", ".code-workspace", ".svg", ".drawio"}
+                 ".txt", ".sh", ".zsh", ".ps1", ".code-workspace", ".svg", ".drawio"}
 EXCLUDED_DIRS = {".git", ".venv", "__pycache__", "node_modules", ".runtime", ".harness-runtime", ".course"}
 
 

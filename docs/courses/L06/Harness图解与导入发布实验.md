@@ -26,7 +26,9 @@ Harness 是围绕执行对象组织一次运行的程序或机制。执行对象
 
 ## 3. 连续可执行命令
 
-前提：已按课程完成本仓库 `.venv` 安装。在控制仓库根目录打开 PowerShell。以下操作依次执行，所有报告使用本次唯一目录。
+前提：已按课程完成本仓库 `.venv` 安装。在控制仓库根目录打开终端，按系统选择命令。以下操作依次执行，所有报告使用本次唯一目录；这是预设演示，不读取个人库存实验 session。
+
+**Windows（PowerShell）：**
 
 ```powershell
 $py = Join-Path (Get-Location) '.venv\Scripts\python.exe'
@@ -48,6 +50,35 @@ if ($LASTEXITCODE -ne 0) { throw '第三阶段应通过，仍需读取分项' }
 if ($LASTEXITCODE -ne 0) { throw '换七行数据的复验未通过' }
 ```
 
+**macOS（zsh）：**
+
+```zsh
+prepare_l06_demo() {
+  py="$PWD/.venv/bin/python"
+  [ -x "$py" ] || { printf '请进入已安装项目的控制仓库根目录。\n'; return 1; }
+  lab="$PWD/docs/courses/L06/examples/import_release_lab.py"
+  local runId
+  runId="$("$py" -c 'import uuid; print(uuid.uuid4().hex)')" || return 1
+  run="$PWD/.runtime/l06-import-demo-$runId"
+  mkdir -p "$run" || return 1
+}
+run_l06_demo() {
+  local mode="$1" name="$2" expected="$3" rows="${4:-3}" actual
+  if "$py" -B -X utf8 "$lab" "$mode" --rows "$rows" --report-path "$run/$name.json"; then
+    actual=0
+  else
+    actual=$?
+  fi
+  printf '%s：实际退出 %s，预期 %s\n' "$name" "$actual" "$expected"
+  [ "$actual" -eq "$expected" ]
+}
+prepare_l06_demo &&
+run_l06_demo false-green 01-false-green 0 &&
+run_l06_demo gate-fixed 02-block 1 &&
+run_l06_demo fixed 03-pass 0 &&
+run_l06_demo fixed 04-transfer 0 7
+```
+
 四次运行预期如下。PASS/BLOCK/WARN 是根据每项 passed 与 level 阅读出的含义。
 
 | 阶段 | 实际分项 | 摘要 | 退出码 |
@@ -61,6 +92,8 @@ if ($LASTEXITCODE -ne 0) { throw '换七行数据的复验未通过' }
 
 ## 4. 读取失败并独立重算
 
+**Windows（PowerShell）：**
+
 ```powershell
 $falseReport = Get-Content -LiteralPath (Join-Path $run '01-false-green.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $falseReport.results | Format-Table name, level, passed, duration_ms
@@ -72,6 +105,29 @@ Write-Output '拒绝这份报告：分项存在 1 个阻断失败，摘要却写
 $green = Get-Content -LiteralPath (Join-Path $run '03-pass.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $green.results | Format-Table name, level, passed, duration_ms
 $green.summary | Format-List
+```
+
+**macOS（zsh）：**
+
+```zsh
+"$py" -X utf8 - "$run" <<'PY'
+import json, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+false_report = json.loads((root / '01-false-green.json').read_text(encoding='utf-8-sig'))
+for item in false_report['results']:
+    print(item['name'], item['level'], item['passed'], item['duration_ms'])
+    if item['name'] == 'invalid_batch_no_write':
+        print(json.dumps(item, ensure_ascii=False, indent=2))
+actual_blocks = sum(item['level'] == 'blocking' and not item['passed'] for item in false_report['results'])
+if actual_blocks != 1 or false_report['summary']['blocking_failed'] != 0:
+    raise SystemExit('没有复现预期假绿灯，先调查分项原因。')
+print('拒绝这份报告：分项存在 1 个阻断失败，摘要却写 0')
+green = json.loads((root / '03-pass.json').read_text(encoding='utf-8-sig'))
+for item in green['results']:
+    print(item['name'], item['level'], item['passed'], item['duration_ms'])
+print(json.dumps(green['summary'], ensure_ascii=False, indent=2))
+PY
 ```
 
 错误适配器应产生 `rejected=False; added=2`。修正后，无效批次应为 `rejected=True; added=0`。帮助项仍然失败，但它属于 observing，因此不阻断本次质量门。若出现导入失败、数据库初始化错误或文件不可读，应先恢复验证条件，不能把任何异常都当成预期的业务反例。
