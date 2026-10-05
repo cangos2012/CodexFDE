@@ -6,6 +6,7 @@ delivery acceptance. No constructor resumes processes or invokes a model.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import ExitStack
 import hashlib
 import json
 import logging
@@ -104,8 +105,9 @@ class DeliveryRuntime:
         with self.tasks.connect(create=False) as db:
             row = db.execute('SELECT revision,payload FROM delivery_runtime WHERE initiative_id=?', (item_id,)).fetchone()
         if row:
-            return json.loads(row['payload']) | {'revision': row['revision']}
+            return {'control_revision': 0} | json.loads(row['payload']) | {'revision': row['revision']}
         return {'initiative_id': item_id, 'run_id': None, 'revision': 0, 'state': 'idle',
+                'control_revision': 0,
                 'profile_id': 'PROFILE-DEFAULT', 'task_id': None, 'session_id': None,
                 'workspace': None, 'subtasks': [], 'subtask_plan_id': None, 'max_workers': 2, 'error': '', 'evidence': [],
                 'budget': {'token_budget': 30000, 'tokens_used': 0, 'time_budget_seconds': 900,
@@ -131,18 +133,19 @@ class DeliveryRuntime:
         target = resolve_reference(workspace, self.runtime) if workspace else None
         return _digest(manifest(target, self.runtime)) if target and target.is_dir() else ''
 
-    def view(self, item_id):
+    def view(self, item_id, *, include_candidate=True):
         with self.lock:
             data = self._load(item_id)
             if data.get('started_at') and data['state'] in {'running', 'queued', 'pausing', 'cancelling', 'awaiting_approval'}:
                 data['budget']['elapsed_seconds'] = int(max(0, time.time() - data['started_at']))
-            data['candidate_sha256'] = self._candidate_hash(data)
+            data['candidate_sha256'] = self._candidate_hash(data) if include_candidate else ''
+            data['candidate_verification'] = ('verified' if data['candidate_sha256'] else 'unavailable') if include_candidate else 'pending'
             with self.tasks.connect() as db:
                 approvals = db.execute('SELECT id,status,payload FROM delivery_tool_approvals WHERE run_id=? ORDER BY rowid', (data['run_id'],)).fetchall()
             data['approvals'] = [json.loads(row['payload']) | {'id': row['id'], 'status': row['status']} for row in approvals]
             data['profiles'] = [{'id': p['id'], 'name': p['name']} for p in self.sessions.profiles()]
             data['can_pause'] = data['state'] in {'running', 'queued', 'awaiting_approval'}
-            data['can_resume'] = (data['state'] in {'paused', 'interrupted'} and not data['budget'].get('usage_unavailable')
+            data['can_resume'] = (bool(data['candidate_sha256']) and data['state'] in {'paused', 'interrupted'} and not data['budget'].get('usage_unavailable')
                 and data['budget']['tokens_used'] < data['budget']['token_budget']
                 and data['budget']['elapsed_seconds'] < data['budget']['time_budget_seconds'])
             data['can_cancel'] = data['state'] in {'running', 'queued', 'pausing', 'paused', 'interrupted', 'awaiting_approval', 'prepared'}
@@ -156,14 +159,31 @@ class DeliveryRuntime:
                 rows = db.execute('SELECT payload FROM delivery_runtime').fetchall()
             return any(json.loads(row['payload'])['state'] in {'running', 'queued', 'pausing', 'cancelling'} for row in rows)
 
-    def close(self):
+    def close(self, timeout=5):
         """Stop owned work without replay, with a bounded shutdown wait."""
-        with self.workflow.lock, self.lock:
-            self.closed = True
-            try:
+        deadline = time.monotonic() + max(0, timeout)
+        self.closed = self.workflow.closed = True
+
+        def signal():
+            for event in [*self.events.copy().values(), *self.workflow.cancel_events.copy().values()]:
+                event.set()
+            for timer in self.timers.copy().values():
+                timer.cancel()
+            return [*self.workers.copy().values(), *self.tool_workers.copy(), *self.workflow.workers.copy().values()]
+
+        # A busy lock or an unavailable database must never delay stopping owned
+        # processes. Repeat under the locks to cover an in-progress handoff.
+        workers = signal()
+        try:
+            with ExitStack() as locks:
+                for lock in (self.workflow.lock, self.lock):
+                    if not lock.acquire(timeout=max(0, deadline - time.monotonic())):
+                        raise RuntimeError('关闭期间状态锁未能释放，中断记录尚未保存')
+                    locks.callback(lock.release)
+                workers.extend(signal())
                 # The database may have been lost or damaged. Shutdown must
                 # never create an empty replacement or lose process cleanup.
-                with self.tasks.connect(create=False) as db:
+                with self.tasks.connect(create=False, timeout=0) as db:
                     rows = db.execute('SELECT initiative_id,revision,payload FROM delivery_runtime').fetchall()
                     db.execute("UPDATE delivery_tool_approvals SET status='revoked' WHERE status IN ('pending','allowed')")
                     for row in rows:
@@ -173,23 +193,17 @@ class DeliveryRuntime:
                             self.events.setdefault(row['initiative_id'], threading.Event()).set()
                             db.execute('UPDATE delivery_runtime SET revision=?,payload=? WHERE initiative_id=?',
                                        (data['revision'], _canonical(data), row['initiative_id']))
-            except Exception as error:
-                self.shutdown_errors.append(str(error))
-                logging.getLogger(__name__).warning('Runtime shutdown could not persist state: %s', error)
-            workers = list(self.workers.values()) + list(self.tool_workers) + list(self.workflow.workers.values())
-            for timer in self.timers.values():
-                timer.cancel()
-            for event in self.events.values():
-                event.set()
-        deadline = time.monotonic() + 5
+        except Exception as error:
+            self.shutdown_errors.append(str(error))
+            logging.getLogger(__name__).warning('Runtime shutdown could not persist state: %s', error)
         for worker in set(workers):
-            if worker is not threading.current_thread():
+            if worker is not threading.current_thread() and worker.ident is not None:
                 try:
                     worker.join(max(0, deadline - time.monotonic()))
                 except RuntimeError as error:
                     self.shutdown_errors.append(str(error))
         return {'automatic_replay': False, 'workers_still_stopping': sum(t.is_alive() for t in set(workers)),
-                'errors': list(self.shutdown_errors)}
+                'errors': list(self.shutdown_errors) + list(self.workflow.shutdown_errors)}
 
     def _require_open(self):
         if self.closed:
@@ -340,9 +354,10 @@ class DeliveryRuntime:
             item = self.initiatives.get(item_id)
             session = self.sessions.create_session(item['project_id'], item.get('goal') or item.get('title') or item_id,
                                                    plan['actor'], data['profile_id'])
+            self._require_open()
             data.update(run_id=plan['plan_id'], state=state, session_id=session['id'], task_id=None,
                         workspace=None, started_at=time.time() - budget['elapsed_seconds'], error='', evidence=[], budget=budget,
-                        profile_sha256=profile_sha)
+                        profile_sha256=profile_sha, control_revision=data['control_revision'] + 1)
             data.pop('requested_control', None)
             data.pop('recovery_accounting', None)
             self.events[item_id] = threading.Event()
@@ -446,14 +461,25 @@ class DeliveryRuntime:
             if timer:
                 timer.cancel()
 
-    def control(self, item_id, action, actor, expected_revision, candidate_sha256=''):
+    def control(self, item_id, action, actor, expected_revision, candidate_sha256='', *,
+                run_id=None, session_id=None, control_revision=None):
         actor = self._actor(actor)
         if action not in {'pause', 'resume', 'cancel'}:
             raise ValueError('运行操作必须是 pause、resume 或 cancel')
         with self.workflow.lock, self.lock:
             self._require_open()
             data = self._load(item_id)
-            if data['revision'] != expected_revision:
+            if type(expected_revision) is not int or expected_revision < 0:
+                raise ValueError('运行版本必须是非负整数')
+            bound_stop = action in {'pause', 'cancel'} and any(
+                value is not None for value in (run_id, session_id, control_revision))
+            if bound_stop:
+                if (not isinstance(run_id, str) or not run_id or run_id != data['run_id']
+                        or not isinstance(session_id, str) or not session_id or session_id != data.get('session_id')
+                        or type(control_revision) is not int or control_revision < 0
+                        or control_revision != data['control_revision']):
+                    raise ValueError('运行控制版本或身份已变化，请刷新后核对本次运行')
+            elif data['revision'] != expected_revision:
                 raise ValueError('运行版本已变化，请刷新后重试')
             if action == 'resume':
                 if data['state'] not in {'paused', 'interrupted'}:
@@ -493,7 +519,8 @@ class DeliveryRuntime:
                 if data['state'] not in {'running', 'queued', 'awaiting_approval', 'pausing', 'paused', 'interrupted', 'prepared'}:
                     raise ValueError('当前运行不能暂停或取消')
                 active = data['state'] in {'running', 'queued', 'pausing'}
-                data.update(state=('pausing' if action == 'pause' else 'cancelling') if active else ('paused' if action == 'pause' else 'cancelled'), requested_control=action)
+                data.update(state=('pausing' if action == 'pause' else 'cancelling') if active else ('paused' if action == 'pause' else 'cancelled'), requested_control=action,
+                            control_revision=data['control_revision'] + 1)
                 self.events.setdefault(item_id, threading.Event()).set()
                 with self.tasks.connect() as db:
                     db.execute("UPDATE delivery_tool_approvals SET status='revoked' WHERE run_id=? AND status IN ('pending','allowed')", (data['run_id'],))
@@ -501,7 +528,9 @@ class DeliveryRuntime:
                 self._event(data, 'runtime/control', actor, {'action': action})
         if action == 'resume':
             self.workflow.execute(item_id, actor, workflow_revision)
-        return self.view(item_id)
+        # Stop has already committed and signalled its worker. Its response must
+        # not start Git in that same cancelled context or advertise an old hash.
+        return self.view(item_id, include_candidate=action == 'resume')
 
     def authorize_tool(self, context, spec, args, call_id, actor):
         item_id = context.get('initiative_id')
@@ -715,12 +744,17 @@ class DeliveryRuntime:
             prior['state'] = 'prepared'
             self._save(prior)
             data = self._begin(item_id, plan)
+        from .execution_control import local, checkpoint
+        previous_event = getattr(local, 'cancel_event', None)
+        local.cancel_event = self.events[item_id]
         folder = self.runtime / 'daily-delivery' / plan['plan_id']
         try:
+            checkpoint()
             if manifest(source, self.runtime) != plan['source_manifest']:
                 raise ValueError('启动分工时源码已变化')
             parent = folder / 'workspace'
-            self._snapshot(source, parent, plan['source_manifest'])
+            self._snapshot(source, parent, plan['source_manifest'],
+                git_runner=lambda command, **options: self._git(item_id, 'parent.snapshot', command, **options))
             spec = folder / 'SPEC.md'
             spec.write_text(plan['spec_text'], encoding='utf-8')
             task = self.tasks.create(plan['request'], actor=actor, spec_path=str(spec), execution_mode='codex',
@@ -760,7 +794,9 @@ class DeliveryRuntime:
                 local.cancel_event = self.events[item_id]
                 self._budget(item_id)
                 workspace = folder / 'subtasks' / contract['id'] / 'workspace'
-                self._snapshot(source, workspace, plan['source_manifest'])
+                self._snapshot(source, workspace, plan['source_manifest'],
+                    git_runner=lambda command, **options:
+                        self._git(item_id, 'subtask.' + contract['id'] + '.snapshot', command, **options))
                 child_spec = workspace.parent / 'SPEC.md'
                 child_spec.write_text(plan['spec_text'] + '\n\n子任务：' + contract['prompt'], encoding='utf-8')
                 # Read-only workers still use a real CLI process and independent output.
@@ -810,7 +846,9 @@ class DeliveryRuntime:
                 ended = time.time()
                 if outcome['status'] != 'review':
                     raise RuntimeError('子任务检查未通过：' + contract['name'])
-                patch = self._patch(workspace, contract['write_set'])
+                patch = self._patch(workspace, contract['write_set'],
+                    git_runner=lambda command, **options:
+                        self._git(item_id, 'subtask.' + contract['id'] + '.patch', command, **options))
                 patch_path = workspace.parent / 'changes.patch'
                 patch_path.write_bytes(patch)
                 self._update_child(item_id, contract['id'], status='completed', ended_at=ended,
@@ -832,16 +870,21 @@ class DeliveryRuntime:
             self._budget(item_id)
             for contract, patch, _, _ in sorted(results, key=lambda r: r[0]['name']):
                 if patch:
-                    subprocess.run(['git', 'apply', '--check', '-'], cwd=parent, input=patch, capture_output=True, check=True)
-                    subprocess.run(['git', 'apply', '-'], cwd=parent, input=patch, capture_output=True, check=True)
-            changed = sorted(p for p in set(plan['source_manifest']) | set(manifest(parent, self.runtime))
-                             if plan['source_manifest'].get(p) != manifest(parent, self.runtime).get(p))
+                    patch_input = folder / 'subtasks' / contract['id'] / 'changes.patch'
+                    for phase, flags in (('parent.apply-check', ['--check']), ('parent.apply', [])):
+                        if patch_input.read_bytes() != patch:
+                            raise ValueError('子任务补丁文件已变化，未汇总到父候选')
+                        self._git(item_id, phase, ['git', 'apply', *flags, str(patch_input)], cwd=parent)
+            postmerge = manifest(parent, self.runtime)
+            changed = sorted(p for p in set(plan['source_manifest']) | set(postmerge)
+                             if plan['source_manifest'].get(p) != postmerge.get(p))
             if not changed or any(not CodexExecutionRunner._allowed(p, plan['write_scope']) for p in changed):
                 raise ValueError('汇总候选无实际改动或超出授权')
             evidence = {'success': True, 'mode': 'codex_exec', 'changed_files': changed, 'managed_subtasks': True,
                         'overlap_proved': any(max(a[0], b[0]) < min(a[1], b[1]) for i, a in enumerate(intervals) for b in intervals[i+1:])}
             patch_path = folder / 'changes.patch'
-            patch_path.write_bytes(self._patch(parent, plan['write_scope']))
+            patch_path.write_bytes(self._patch(parent, plan['write_scope'],
+                git_runner=lambda command, **options: self._git(item_id, 'parent.patch', command, **options)))
             if binding_id:
                 actual_diff = {'path': str(patch_path), 'sha256': hashlib.sha256(patch_path.read_bytes()).hexdigest()}
                 try:
@@ -855,6 +898,9 @@ class DeliveryRuntime:
                     'phase_contract': contract, 'diff_artifact': actual_diff})
             result = run_task(self.tasks, task['id'], actor, execution_runner=lambda _: evidence,
                               suite_runner=CandidateProjectEval(parent, self.runtime, task['id'], plan['project']['eval_command'], 'subtasks-final', timeout=self._budget(item_id)))
+            # run_task returns a failed task when its Eval was cancelled. Keep
+            # that evidence, but let the runtime preserve the requested control.
+            self._budget(item_id)
             if binding_id:
                 contract = None
                 if result['status'] == 'review':
@@ -873,6 +919,9 @@ class DeliveryRuntime:
             self.tasks.append_event(task['id'], '日常研发交付包已保存', actor=actor, evidence={'workspace': str(parent), 'patch_path': str(patch_path),
                 'patch_sha256': hashlib.sha256(patch_path.read_bytes()).hexdigest(), 'source_sha256': plan['source_sha256'], 'status': result['status'], 'merged': False})
             with self.workflow.lock, self.lock:
+                # Control and close take these locks too; they cannot be
+                # overwritten by a late successful Eval publishing review.
+                self._budget(item_id)
                 data = self._load(item_id)
                 data['budget']['elapsed_seconds'] = int(time.time() - data['started_at'])
                 data.update(state=result['status'], evidence=[{'path': str(patch_path), 'sha256': hashlib.sha256(patch_path.read_bytes()).hexdigest()}])
@@ -899,6 +948,128 @@ class DeliveryRuntime:
                         self.tasks.transition(task['id'], 'failed', '分工运行中断，证据保留', error=str(exc))
                     self.workflow.learning.finish(task['id'], note=str(exc))
                 self._event(data, 'runtime/end', 'harness', {'state': data['state'], 'error': str(exc)})
+        finally:
+            local.cancel_event = previous_event
+
+    def _git(self, item_id, phase, command, *, cwd, capture_output=True, check=True):
+        """Bound each internal Git step by this run's remaining time, not tokens."""
+        with self.lock:
+            self._require_open()
+            data = self._load(item_id)
+            event = self.events[item_id]
+            if event.is_set():
+                raise RuntimeError('运行已被暂停或取消，候选与证据保留')
+            remaining = data['budget']['time_budget_seconds'] - (time.time() - data['started_at'])
+            if remaining <= 0:
+                raise RuntimeError('事项总时间预算已耗尽')
+            step_started = time.monotonic()
+            call_id = secrets.token_hex(12)
+            context = {'call_id': call_id, 'initiative_id': item_id, 'run_id': data['run_id'],
+                       'task_id': data.get('task_id'), 'phase': phase}
+            self._event(data, 'runtime/git-start', 'harness', context | {'command': list(command)})
+        folder = self.runtime / 'daily-delivery' / context['run_id'] / 'git-processes' / call_id
+        failure = None
+        try:
+            return self._git_process(command, cwd=cwd, timeout=remaining - (time.monotonic() - step_started), control_event=event,
+                receipt_dir=folder, context=context, capture_output=capture_output, check=check)
+        except BaseException as error:
+            failure = error
+            raise
+        finally:
+            # These are process events, not model calls: recovery must not count
+            # an interrupted Git step as an unmeasured token-consuming call.
+            try:
+                from .file_io import read_bytes
+                receipt_path = folder / 'process.json'
+                receipt_bytes = read_bytes(receipt_path)
+                receipt = json.loads(receipt_bytes.decode('utf-8'))
+                evidence = {key: receipt[key] for key in ('command', 'returncode', 'interrupted', 'success')}
+                evidence.update(context, path=str(receipt_path), sha256=hashlib.sha256(receipt_bytes).hexdigest())
+                with self.lock:
+                    self._event(self._load(item_id), 'runtime/git-result', 'harness', evidence)
+            except Exception as persistence_error:
+                if failure is None:
+                    raise
+                failure.add_note('Git进程证据保存失败：' + str(persistence_error))
+
+    @staticmethod
+    def _git_process(command, *, cwd, timeout=120, control_event=None, receipt_dir=None,
+                     context=None, capture_output=True, check=True):
+        """Use the existing stream owner; binary patch bytes never use its text pipes."""
+        from .execution_control import local, checkpoint
+        from .file_io import atomic_write_text, read_bytes
+        command = list(command)
+        control_event = control_event or getattr(local, 'cancel_event', None)
+        if timeout <= 0:
+            raise RuntimeError('Git步骤剩余时间预算已耗尽')
+        checkpoint()
+        if control_event is not None and control_event.is_set():
+            raise RuntimeError('运行已被暂停或取消，候选与证据保留')
+        started = time.monotonic()
+        folder = Path(receipt_dir) if receipt_dir else Path(cwd).parent / 'git-processes' / secrets.token_hex(12)
+        folder.mkdir(parents=True, exist_ok=False)
+        receipt_path = folder / 'process.json'
+        receipt = dict(context or {}, command=command, executed_command=command,
+            cwd=str(Path(cwd).resolve()), requested_at=time.time(), timeout_seconds=timeout,
+            status='started', returncode=None, interrupted=False, success=False, error='')
+        template = next((arg.partition('=')[2] for arg in command if arg.startswith('--template=')), None)
+        if template:
+            template_config = Path(template) / 'config'
+            receipt['template_config'] = {'path':str(template_config),
+                'sha256':hashlib.sha256(read_bytes(template_config)).hexdigest()}
+        if 'apply' in command:
+            patch_input = Path(command[-1])
+            receipt['input_patch'] = {'path':str(patch_input), 'sha256':hashlib.sha256(read_bytes(patch_input)).hexdigest()}
+        atomic_write_text(receipt_path, _canonical(receipt))
+        result = failure = None
+        try:
+            if time.monotonic() - started >= timeout:
+                raise RuntimeError('Git步骤剩余时间预算已耗尽')
+            # Never invoke the coding runner factory or parse model/token events.
+            runner = CodexExecutionRunner(cwd, folder)
+            runner.control_event = control_event
+            result = runner._run_codex_streaming(command, '', timeout, lambda line: None, started)
+            if check and result.returncode:
+                raise subprocess.CalledProcessError(result.returncode, command, result.stdout, result.stderr)
+            if template and result.returncode == 0:
+                import configparser
+                if hashlib.sha256(read_bytes(template_config)).hexdigest() != receipt['template_config']['sha256']:
+                    raise ValueError('候选Git模板配置已变化')
+                candidate_config = Path(cwd) / '.git' / 'config'
+                if candidate_config.is_symlink():
+                    raise ValueError('候选Git配置不得为符号链接')
+                config_bytes = read_bytes(candidate_config)
+                config = configparser.ConfigParser()
+                config.read_string(config_bytes.decode('utf-8'))
+                if config.get('core', 'autocrlf', fallback='').strip().lower() != 'false':
+                    raise ValueError('候选Git配置未采用冻结的autocrlf=false')
+                receipt['candidate_config'] = {'path':str(candidate_config),
+                    'sha256':hashlib.sha256(config_bytes).hexdigest(), 'core.autocrlf':'false'}
+            checkpoint()
+            if control_event is not None and control_event.is_set():
+                raise RuntimeError('运行已被暂停或取消，候选与证据保留')
+            return result
+        except BaseException as error:
+            failure = error
+            raise
+        finally:
+            receipt.update(finished_at=time.time(), returncode=result.returncode if result else None,
+                stdout=result.stdout if result else '', stderr=result.stderr if result else '',
+                success=bool(result and result.returncode == 0 and failure is None),
+                interrupted=bool(control_event and control_event.is_set()),
+                status='failed' if failure else 'completed', error=str(failure) if failure else '')
+            try:
+                output = next((arg.partition('=')[2] for arg in command if arg.startswith('--output=')), None)
+                if output:
+                    patch_output = Path(output)
+                    if patch_output.is_file():
+                        receipt['output_patch'] = {'path':str(patch_output),
+                            'sha256':hashlib.sha256(read_bytes(patch_output)).hexdigest()}
+                atomic_write_text(receipt_path, _canonical(receipt))
+            except Exception as persistence_error:
+                if failure is None:
+                    raise
+                failure.add_note('Git进程证据保存失败：' + str(persistence_error))
 
     def _update_child(self, item_id, child_id, **fields):
         with self.lock:
@@ -909,7 +1080,8 @@ class DeliveryRuntime:
             self._event(data, 'subtask/status', 'harness', {'subtask_id': child_id, **fields})
 
     @staticmethod
-    def _snapshot(source, workspace, files):
+    def _snapshot(source, workspace, files, *, git_runner=None):
+        execute = git_runner or DeliveryRuntime._git_process
         workspace.mkdir(parents=True, exist_ok=False)
         for relative, digest in files.items():
             content = (source / relative).read_bytes()
@@ -918,14 +1090,28 @@ class DeliveryRuntime:
             target = workspace / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(content)
-        subprocess.run(['git', 'init', '-q'], cwd=workspace, check=True, capture_output=True)
-        subprocess.run(['git', 'add', '-f', '--all'], cwd=workspace, check=True, capture_output=True)
-        subprocess.run(['git', '-c', 'user.name=Workbench snapshot', '-c', 'user.email=workbench@localhost', '-c', 'commit.gpgsign=false',
+        # Machine-wide autocrlf must not silently change an isolated candidate's
+        # bytes. A controlled template also avoids a separate config process;
+        # explicit project .gitattributes still define their own policy.
+        template = workspace.parent / 'git-templates' / secrets.token_hex(12)
+        template.mkdir(parents=True, exist_ok=False)
+        from .file_io import atomic_write_text
+        atomic_write_text(template / 'config', '[core]\n\tautocrlf = false\n')
+        execute(['git', 'init', '-q', '--template=' + str(template)], cwd=workspace, check=True, capture_output=True)
+        execute(['git', 'add', '-f', '--all'], cwd=workspace, check=True, capture_output=True)
+        execute(['git', '-c', 'user.name=Workbench snapshot', '-c', 'user.email=workbench@localhost', '-c', 'commit.gpgsign=false',
                         'commit', '--allow-empty', '-q', '-m', 'Frozen delivery source'], cwd=workspace, check=True, capture_output=True)
 
     @staticmethod
-    def _patch(workspace, scopes):
+    def _patch(workspace, scopes, *, git_runner=None):
+        execute = git_runner or DeliveryRuntime._git_process
         for scope in scopes:
             if (workspace / scope).exists():
-                subprocess.run(['git', 'add', '-f', '-N', '--all', '--', scope], cwd=workspace, check=True, capture_output=True)
-        return subprocess.run(['git', 'diff', '--binary', 'HEAD'], cwd=workspace, check=True, capture_output=True).stdout
+                execute(['git', 'add', '-f', '-N', '--all', '--', scope], cwd=workspace, check=True, capture_output=True)
+        patch_folder = workspace.parent / 'git-patches'
+        patch_folder.mkdir(parents=True, exist_ok=True)
+        patch_output = patch_folder / (secrets.token_hex(12) + '.patch')
+        execute(['git', 'diff', '--binary', '--no-ext-diff', '--no-textconv', '--output=' + str(patch_output), 'HEAD'],
+                cwd=workspace, check=True, capture_output=True)
+        from .file_io import read_bytes
+        return read_bytes(patch_output)

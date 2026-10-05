@@ -1,7 +1,9 @@
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -12,6 +14,12 @@ from workbench.task_store import TaskStore
 from workbench.candidate_preview import CandidatePreviews
 from workbench.process_guard import spawn as owned_spawn
 from workbench.managed_process import ManagedProcess
+from workbench.generic_preview import ProjectPreviews
+from workbench.migration import prepare_migration, restore_migration
+from workbench.project_configuration import ProjectConfiguration
+from workbench.project_delivery import CandidateProjectEval
+from workbench.project_store import ProjectStore
+from workbench.reference_paths import reference_mapping_scope, unload_reference_mappings
 
 
 PREVIEW_SERVICE = r'''
@@ -61,6 +69,148 @@ class CandidatePreviewTests(unittest.TestCase):
             if owner:owner.close()
             if process.poll() is None:process.kill()
             process.wait(timeout=5)
+
+    def migrated_daily_fixture(self, directory):
+        root = Path(directory).resolve()
+        original = root / 'original-runtime'
+        store = TaskStore(original / 'workbench.db')
+        source = root / 'original-project'
+        source.mkdir()
+        subprocess.run(['git', 'init', '-q'], cwd=source, check=True, capture_output=True)
+        script = ("import json\nprint(json.dumps({'summary':{'decision':'pass','total':1,'passed':1,'blocking_failed':0},"
+                  "'results':[{'name':'maintenance-fixture','level':'blocking','passed':True}]}))\n")
+        (source / 'check.py').write_text(script, encoding='utf-8')
+        projects = ProjectStore(store.path)
+        command = [sys.executable, '-B', 'check.py']
+        projects.create('isolated preview migration fixture', source, command)
+        spec = original / 'specs' / 'preview.md'
+        spec.parent.mkdir()
+        spec.write_text('Isolated historical preview fixture; no student or customer acceptance.', encoding='utf-8')
+        task = store.create('isolated migrated daily preview', requirement_id='LEGACY-PREVIEW-FIXTURE',
+                            spec_path=str(spec), execution_mode='codex', write_scope=['web'])
+        workspace = original / 'daily-delivery' / task['id'] / 'workspace'
+        (workspace / 'web').mkdir(parents=True)
+        (workspace / 'web/index.html').write_bytes(b'checked preview fixture')
+        (workspace / 'check.py').write_text(script, encoding='utf-8')
+        subprocess.run(['git', 'init', '-q'], cwd=workspace, check=True, capture_output=True)
+        for status in ('spec_ready', 'executing', 'evaluating'):
+            store.transition(task['id'], status)
+        report = CandidateProjectEval(workspace, original, task['id'], command, 'migration-fixture')()
+        store.transition(task['id'], 'review', result=report)
+        store.append_event(task['id'], '受控执行阶段完成', evidence={'change_manifest':[
+            {'path':'web/index.html', 'after_sha256':hashlib.sha256(b'checked preview fixture').hexdigest()}]})
+        store.append_event(task['id'], '日常研发交付包已保存', evidence={
+            'status':'review', 'workspace':str(workspace)})
+        with store.connect() as db:
+            original_result = db.execute('SELECT result_json FROM tasks WHERE id=?', (task['id'],)).fetchone()[0]
+            original_events = [tuple(row) for row in db.execute(
+                'SELECT id,evidence_json FROM task_events WHERE task_id=? ORDER BY id', (task['id'],))]
+        evidence_hashes = {path.relative_to(original).as_posix():hashlib.sha256(path.read_bytes()).hexdigest()
+                           for path in (Path(report['runner']['report_path']), Path(report['runner']['process_path']))}
+        backup = prepare_migration(original, projects, 'fixture-owner')
+        target = root / 'migrated-runtime'
+        migrated_source = root / 'migrated-project'
+        shutil.copytree(source, migrated_source)
+        restored = restore_migration(backup['archive_path'], target, {str(source):str(migrated_source)})
+        self.assertEqual('ready', restored['execution_environment']['status'])
+        # Remove the historical candidate location without deleting its bytes.
+        retained = workspace.parent / 'retained-original-workspace'
+        self.assertTrue(workspace.resolve().is_relative_to(root))
+        self.assertTrue(retained.resolve().is_relative_to(root))
+        workspace.rename(retained)
+        self.assertFalse(workspace.exists())
+        migrated_store = TaskStore(target / 'workbench.db')
+        migrated_projects = ProjectStore(migrated_store.path)
+        previews = ProjectPreviews(target, migrated_store, migrated_projects, ProjectConfiguration(migrated_projects))
+        self.addCleanup(unload_reference_mappings, target)
+        self.addCleanup(unload_reference_mappings, original)
+        return {'runtime':target, 'store':migrated_store, 'task':task, 'previews':previews,
+                'historical_workspace':workspace, 'workspace':target / workspace.relative_to(original),
+                'original_result':original_result, 'original_events':original_events, 'evidence_hashes':evidence_hashes}
+
+    def assert_migrated_history_unchanged(self, fixture):
+        with fixture['store'].connect() as db:
+            result = db.execute('SELECT result_json FROM tasks WHERE id=?', (fixture['task']['id'],)).fetchone()[0]
+            events = [tuple(row) for row in db.execute(
+                'SELECT id,evidence_json FROM task_events WHERE task_id=? AND id<=? ORDER BY id',
+                (fixture['task']['id'], fixture['original_events'][-1][0]))]
+        self.assertEqual(fixture['original_result'], result)
+        self.assertEqual(fixture['original_events'], events)
+        for relative, expected in fixture['evidence_hashes'].items():
+            self.assertEqual(expected, hashlib.sha256((fixture['runtime'] / relative).read_bytes()).hexdigest())
+
+    def test_migrated_daily_preview_plan_and_start_share_effective_workspace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self.migrated_daily_fixture(directory)
+            previews = fixture['previews']; captured = []
+            plan = previews.plan(fixture['task']['id'])
+            self.assertTrue(plan['available']); self.assertTrue(plan['legacy'])
+            with patch('workbench.candidate_preview.spawn', side_effect=self.fixture_spawn('ok', captured)) as launch:
+                try:
+                    opened = previews.start(fixture['task']['id'], 'fixture-owner')
+                    self.assertEqual(str(fixture['workspace']), opened['workspace'])
+                    self.assertEqual(fixture['workspace'], launch.call_args.args[1])
+                    self.assertEqual(1, launch.call_count)
+                    self.assertIsNone(captured[0][0].poll())
+                    self.assert_migrated_history_unchanged(fixture)
+                    previews.close()
+                    self.assertIsNotNone(captured[0][0].poll()); self.assertFalse(previews.busy())
+                finally:
+                    previews.close(); self.cleanup_processes(captured)
+
+    def test_migrated_daily_preview_rejects_effective_workspace_outside_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self.migrated_daily_fixture(directory)
+            outside = Path(directory) / 'outside-candidate'
+            shutil.copytree(fixture['workspace'], outside)
+            mapping = {str(fixture['historical_workspace']):str(outside)}
+            try:
+                with reference_mapping_scope(fixture['runtime'], mapping), patch('workbench.candidate_preview.spawn') as launch:
+                    with self.assertRaisesRegex(ValueError, '不在原运行目录'):
+                        CandidatePreviews(fixture['runtime'], fixture['store']).start(fixture['task']['id'], 'fixture-owner')
+                    launch.assert_not_called()
+                self.assert_migrated_history_unchanged(fixture)
+            finally:
+                fixture['previews'].close()
+
+    def test_migrated_daily_preview_rejects_candidate_changed_after_eval(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self.migrated_daily_fixture(directory)
+            plan = fixture['previews'].plan(fixture['task']['id'])
+            self.assertTrue(plan['available'])
+            (fixture['workspace'] / 'web/index.html').write_bytes(b'changed after migration')
+            try:
+                with patch('workbench.candidate_preview.spawn') as launch:
+                    with self.assertRaisesRegex(ValueError, '变化|重新'):
+                        fixture['previews'].start(fixture['task']['id'], 'fixture-owner')
+                    launch.assert_not_called()
+                self.assert_migrated_history_unchanged(fixture)
+            finally:
+                fixture['previews'].close()
+
+    def test_migrated_daily_preview_rejects_symbolic_workspace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self.migrated_daily_fixture(directory)
+            workspace = fixture['workspace']
+            retained = workspace.parent / 'retained-migrated-workspace'
+            self.assertTrue(workspace.resolve().is_relative_to(fixture['runtime']))
+            self.assertTrue(retained.resolve().is_relative_to(fixture['runtime']))
+            workspace.rename(retained)
+            try:
+                workspace.symlink_to(retained, target_is_directory=True)
+            except OSError as error:
+                retained.rename(workspace)
+                self.skipTest('directory symlink is unavailable: ' + str(error))
+            try:
+                with patch('workbench.candidate_preview.spawn') as launch:
+                    with self.assertRaisesRegex(ValueError, '不在原运行目录'):
+                        CandidatePreviews(fixture['runtime'], fixture['store']).start(fixture['task']['id'], 'fixture-owner')
+                    launch.assert_not_called()
+                self.assert_migrated_history_unchanged(fixture)
+            finally:
+                workspace.unlink()
+                retained.rename(workspace)
+                fixture['previews'].close()
 
     def test_unverified_candidate_never_launches(self):
         with tempfile.TemporaryDirectory() as directory, patch('workbench.candidate_preview.spawn') as spawn:

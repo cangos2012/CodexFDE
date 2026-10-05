@@ -9,6 +9,8 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 
 
 class LocalDeliveryFixture:
@@ -150,15 +152,39 @@ class LocalDeliveryFixture:
         return source, asset
 
     def close(self):
-        for worker in self.service.workers.values():
-            worker.join(30)
-        self.temporary.cleanup()
+        deadline = time.monotonic() + 30
+        for event in list(self.service.cancel_events.values()):
+            event.set()
+        workers = set(self.service.workers.values())
+        try:
+            for worker in workers:
+                if worker is not threading.current_thread():
+                    worker.join(max(0, deadline - time.monotonic()))
+            pending = [worker.name for worker in workers if worker.is_alive()]
+            if pending:
+                raise RuntimeError('本地契约夹具关闭未完成，线程仍在运行，目录保留：'
+                                   + str(self.root) + '；' + ', '.join(pending))
+            self.temporary.cleanup()
+        except BaseException:
+            # A later GC/exit cleanup must not delete a retained, incomplete tree.
+            # TemporaryDirectory has no public API for cancelling that finalizer.
+            self.temporary._finalizer.detach()
+            raise
 
     def __enter__(self):
         return self
 
-    def __exit__(self, *args):
-        self.close()
+    def __exit__(self, exc_type, exc, traceback):
+        try:
+            self.close()
+        except BaseException as cleanup:
+            if exc is None:
+                raise
+            if hasattr(exc, 'add_note'):
+                exc.add_note('本地契约夹具关闭未完成：' + str(cleanup))
+            else:
+                print('本地契约夹具关闭未完成：' + str(cleanup), file=sys.stderr)
+        return False
 
 
 def initiative_delivery_is_controlled():

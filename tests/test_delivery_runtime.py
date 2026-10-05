@@ -1,5 +1,6 @@
 """Local process fixtures, isolated repositories; no model or customer data."""
 import json
+from contextlib import contextmanager
 from pathlib import Path
 import re
 import shutil
@@ -30,13 +31,24 @@ class LocalWorker(CodexExecutionRunner):
     ready_lock = threading.Lock()
     active = 0
     peak = 0
+    completion_gate = None
+    cli_executable = None
     def _run_codex_streaming(self, command, prompt, timeout, callback, started):
         matched = re.search(r'相对路径：([a-z]\.txt)',prompt)
         filename = matched.group(1) if matched else 'a.txt'
-        script = ('import time,json;from pathlib import Path;'
-                  + "print(json.dumps({'type':'turn.completed','usage':{'input_tokens':10,'output_tokens':10,'total_tokens':20}}),flush=True);"
-                  + 'time.sleep(' + str(self.delay) + ');'
-                  + ("Path(" + repr(filename) + ").write_text('2');" if 'read-only' not in command else '')
+        completion_gate = self.completion_gate
+        wait_for_completion = 'time.sleep(' + str(self.delay) + ')\n'
+        if completion_gate is not None:
+            wait_for_completion = (
+                'gate=Path(' + repr(str(completion_gate)) + ')\n'
+                'deadline=time.monotonic()+30\n'
+                'while not gate.is_file():\n'
+                "    if time.monotonic() >= deadline: raise TimeoutError('four CLI completion gate did not open')\n"
+                '    time.sleep(.01)\n')
+        script = ('import time,json\nfrom pathlib import Path\n'
+                  + "print(json.dumps({'type':'turn.completed','usage':{'input_tokens':10,'output_tokens':10,'total_tokens':20}}),flush=True)\n"
+                  + wait_for_completion
+                  + ("Path(" + repr(filename) + ").write_text('2')\n" if 'read-only' not in command else '')
                   + "print('fixture finished')")
         observed_usage = False
         def observed(line):
@@ -48,8 +60,10 @@ class LocalWorker(CodexExecutionRunner):
                     observed_usage = True
                     LocalWorker.active += 1
                     LocalWorker.peak = max(LocalWorker.peak, LocalWorker.active)
+                    if completion_gate is not None and LocalWorker.active == 4 and len(self.ready) == 4:
+                        completion_gate.write_text('four real CLI usage callbacks observed')
         try:
-            return super()._run_codex_streaming([sys.executable, '-c', script], '', timeout, observed, started)
+            return super()._run_codex_streaming([self.cli_executable or sys.executable, '-c', script], '', timeout, observed, started)
         finally:
             if observed_usage:
                 with self.ready_lock:LocalWorker.active -= 1
@@ -58,7 +72,8 @@ class LocalWorker(CodexExecutionRunner):
 class DeliveryRuntimeTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
+        # Compatibility tests compose this setUp without inheriting the class.
+        self.addCleanup(DeliveryRuntimeTests._cleanup_runtime_fixture, self)
         self.root = Path(self.temp.name)
         self.repository = self.root / 'project'
         self.repository.mkdir()
@@ -80,7 +95,6 @@ class DeliveryRuntimeTests(unittest.TestCase):
                                            projects=self.projects, enabled=True)
         self.runtime = DeliveryRuntime(self.repository, self.runtime_dir, self.tasks, self.projects,
                                        self.items, self.workflow, runner_factory=LocalWorker)
-        self.addCleanup(self.runtime.close)
         self.workflow.submitter = self.runtime.submit_daily
         self.plan = prepare_daily(self.repository, self.runtime_dir, 'owner', 'update-a and update-b',
                                   'values are 2', ['a.txt', 'b.txt'], project=self.project)
@@ -89,6 +103,22 @@ class DeliveryRuntimeTests(unittest.TestCase):
         work = self.workflow._load(self.item['id'])
         work.update(stage='confirmed', plan=self.plan, reviewer='reviewer', origin_manifest=self.plan['source_manifest'])
         self.workflow._save(work)
+
+    def _cleanup_runtime_fixture(self):
+        try:
+            runtime = getattr(self, 'runtime', None)
+            if runtime is not None:
+                receipt = runtime.close()
+                workers = [*runtime.workers.copy().values(), *runtime.tool_workers.copy(),
+                           *runtime.workflow.workers.copy().values()]
+                pending = [worker.name for worker in set(workers) if worker.is_alive()]
+                if receipt['workers_still_stopping'] or pending:
+                    raise RuntimeError('Runtime fixture shutdown incomplete; directory retained: '
+                                       + str(self.root) + '; workers: ' + ', '.join(pending))
+            self.temp.cleanup()
+        except BaseException:
+            self.temp._finalizer.detach()
+            raise
 
     def view(self):
         return self.runtime.view(self.item['id'])
@@ -220,10 +250,17 @@ class DeliveryRuntimeTests(unittest.TestCase):
             [{'name':name,'prompt':'update '+name,'write_set':[name]} for name in names],max_workers=4)
         self.assertEqual(4,prepared['max_workers']);self.assertEqual(4,prepared['budget']['max_workers'])
         with LocalWorker.ready_lock:LocalWorker.peak=0;LocalWorker.active=0;LocalWorker.ready.clear()
-        with patch.object(LocalWorker,'delay',1):
+        # Parent-owned synchronization lives outside every candidate/source;
+        # real CLI processes stay alive until all four usage callbacks arrive.
+        completion_gate = self.root / 'four-worker-completion-gate'
+        # This stdlib-only fake CLI models a single executable. Project Eval
+        # and all other LocalWorker fixtures keep their original venv command.
+        with patch.object(LocalWorker,'completion_gate',completion_gate), \
+                patch.object(LocalWorker,'cli_executable',sys._base_executable):
             self.runtime.start_subtasks(self.item['id'],'owner',prepared['revision'],'four-key',prepared['subtask_plan_id'])
             result=self.wait()
         self.assertEqual('review',result['state'],result.get('error'))
+        self.assertTrue(completion_gate.is_file())
         self.assertEqual(4,LocalWorker.peak)
         self.assertEqual(4,result['budget']['max_workers'])
         self.assertEqual(80,result['budget']['tokens_used'])
@@ -334,7 +371,9 @@ class DeliveryRuntimeTests(unittest.TestCase):
                 time.sleep(.01)
             self.assertEqual({'a.txt','b.txt'},LocalWorker.ready)
             current = self.view()
-            self.runtime.control(self.item['id'], 'pause', 'owner', current['revision'])
+            self.runtime.control(self.item['id'], 'pause', 'owner', current['revision'],
+                                 run_id=current['run_id'], session_id=current['session_id'],
+                                 control_revision=current['control_revision'])
             result = self.wait()
         self.assertEqual('paused', result['state'], result['error'])
         with self.assertRaisesRegex(ValueError, 'SHA-256'):
@@ -623,6 +662,238 @@ class DeliveryRuntimeTests(unittest.TestCase):
         self.assertEqual('cancelled',self.wait()['state'])
         self.assertEqual('1',(self.repository/'a.txt').read_text())
 
+    @contextmanager
+    def parent_eval_fixture(self, phase):
+        """Keep a real parent Eval alive; retain and reclaim only this fixture's jobs."""
+        marker = self.root / 'parent-eval-ready.json'
+        check = (
+            "import json,time;from pathlib import Path\n"
+            "values=[Path(n).read_text() for n in ('a.txt','b.txt')]\n"
+            "parent='subtasks' not in Path.cwd().parts\n"
+            f"waiting=parent and values=={['1','1'] if phase == 'before' else ['2','2']!r}\n"
+            "if waiting:\n"
+            f"    Path({str(marker)!r}).write_text(json.dumps({{'phase':{phase!r},'workspace':str(Path.cwd())}}))\n"
+            "    print('parent Eval ready',flush=True)\n"
+            "    time.sleep(30)\n"
+            "ok=all(v in ('1','2') for v in values)\n"
+            "print(json.dumps({'summary':{'decision':'pass' if ok else 'block','total':1,'passed':int(ok),'blocking_failed':int(not ok)},'results':[{'name':'value','level':'blocking','passed':ok}]}))\n"
+            "raise SystemExit(0 if ok else 1)\n"
+        )
+        (self.repository / 'check.py').write_text(check)
+        self.plan = prepare_daily(self.repository, self.runtime_dir, 'owner', 'update-a and update-b',
+                                  'values are 2', ['a.txt', 'b.txt'], project=self.project)
+        self.plan.update(plan_id='plan-fixture', expires_at=time.time()+900)
+        self.runtime.freeze_profile(self.item['id'], self.plan)
+        work = self.workflow._load(self.item['id'])
+        work.update(stage='confirmed', plan=self.plan, origin_manifest=self.plan['source_manifest'])
+        self.workflow._save(work)
+        from workbench import execution
+        from workbench.project_delivery import CandidateProjectEval
+        original_spawn = execution.spawn_owned_process
+        original_eval = CandidateProjectEval.__call__
+        target_phase_started = threading.Event()
+        target_label = 'subtasks-before' if phase == 'before' else 'subtasks-final'
+        parent_workspace = (self.runtime_dir / 'daily-delivery/plan-fixture/workspace').resolve()
+        processes = []
+        def spawn(command, cwd, **kwargs):
+            process, owner, prefix = original_spawn(command, cwd, **kwargs)
+            processes.append((process, owner))
+            return process, owner, prefix
+        def evaluate(evaluator, *args, **kwargs):
+            if evaluator.label == target_label and evaluator.workspace.resolve() == parent_workspace:
+                target_phase_started.set()
+            return original_eval(evaluator, *args, **kwargs)
+        try:
+            with patch('workbench.execution.spawn_owned_process', side_effect=spawn), \
+                    patch.object(self.runtime, 'runner_factory', self.parent_fixture_child_runner), \
+                    patch.object(CandidateProjectEval, '__call__', evaluate):
+                self.start()
+                # Measure readiness of the selected parent Eval, separately
+                # from the unchanged 30-second delivery completion tests.
+                self.assertTrue(target_phase_started.wait(30), 'target parent Eval phase did not start within 30 seconds')
+                deadline = time.monotonic()+10
+                while not marker.is_file() and time.monotonic() < deadline:
+                    time.sleep(.01)
+                if not marker.is_file():
+                    import faulthandler
+                    for workspace in (self.runtime_dir / 'daily-delivery/plan-fixture').rglob('workspace'):
+                        print('Parent Eval fixture timeout:', workspace,
+                              {name: (workspace / name).read_text() for name in ('a.txt', 'b.txt')
+                               if (workspace / name).is_file()}, flush=True)
+                    faulthandler.dump_traceback()
+                self.assertTrue(marker.is_file(), 'real parent Eval did not reach readiness within 10 seconds')
+                ready = json.loads(marker.read_text())
+                self.assertEqual(phase, ready['phase'])
+                self.assertEqual(self.runtime_dir / 'daily-delivery/plan-fixture/workspace', Path(ready['workspace']))
+                self.assertTrue(any(process.poll() is None for process, _ in processes))
+                yield processes
+        finally:
+            # Red tests must not leave a 30-second Eval holding the temporary tree.
+            event = self.runtime.events.get(self.item['id'])
+            if event:
+                event.set()
+            for process, owner in processes:
+                if process.poll() is None:
+                    if owner:
+                        owner.close()
+                    else:
+                        process.kill()
+                    process.wait(timeout=5)
+            worker = self.runtime.workers.get(self.item['id'])
+            if worker:
+                worker.join(5)
+                self.assertFalse(worker.is_alive(), 'fixture owner still alive after controlled cleanup')
+
+    @staticmethod
+    def parent_fixture_child_runner(workspace, runtime):
+        """Controlled synthetic child execution; parent/child Eval remain real processes."""
+        def execute(task, **kwargs):
+            changed = list(task['write_scope'])
+            for path in changed:
+                (Path(workspace) / path).write_text('2')
+            return {'success': True, 'mode': 'codex_exec', 'changed_files': changed,
+                    'usage': {'total_tokens': 20}, 'fixture': 'controlled child; no model or CLI execution'}
+        return execute
+
+    def assert_parent_eval_stopped(self, processes, state):
+        worker = self.runtime.workers[self.item['id']]
+        worker.join(5)
+        self.assertFalse(worker.is_alive(), 'control did not stop the actual parent Eval within 5 seconds')
+        result = self.view()
+        self.assertEqual(state, result['state'], result.get('error'))
+        self.assertEqual('failed', self.tasks.get(result['task_id'])['status'])
+        for process, owner in processes:
+            self.assertIsNotNone(process.poll())
+            if owner:
+                self.assertIsNone(owner.handle)
+        receipts = list((self.runtime_dir / 'project-reports' / result['task_id']).glob('*/process.json'))
+        self.assertTrue(receipts)
+        recorded = [json.loads(path.read_text()) for path in receipts]
+        cancelled = [receipt for receipt in recorded if receipt['returncode'] == 130]
+        self.assertTrue(cancelled, 'no cancelled parent Eval process receipt was retained')
+        self.assertTrue(all(Path(receipt['cwd']) == self.runtime_dir / 'daily-delivery/plan-fixture/workspace'
+                            for receipt in cancelled))
+        self.assertEqual('1', (self.repository / 'a.txt').read_text())
+        self.assertEqual('1', (self.repository / 'b.txt').read_text())
+        self.assertFalse(self.runtime.busy())
+        return result
+
+    def test_close_during_parent_before_eval_stops_real_process(self):
+        with self.parent_eval_fixture('before') as processes:
+            started = time.monotonic()
+            receipt = self.runtime.close()
+            self.assertLess(time.monotonic()-started,5)
+            self.assertEqual(0, receipt['workers_still_stopping'])
+            self.assert_parent_eval_stopped(processes, 'cancelled')
+            self.assertFalse(any(c['task_id'] for c in self.view()['subtasks']))
+
+    def test_cancel_during_parent_before_eval_stops_real_process(self):
+        from workbench.execution_control import local
+        previous = threading.Event()
+        restored = []
+        original = self.runtime._run_subtasks_owned
+        def owned(*args):
+            local.cancel_event = previous
+            try:
+                return original(*args)
+            finally:
+                restored.append(getattr(local, 'cancel_event', None) is previous)
+                local.cancel_event = None
+        with patch.object(self.runtime, '_run_subtasks_owned', side_effect=owned):
+            with self.parent_eval_fixture('before') as processes:
+                current = self.view()
+                self.runtime.control(self.item['id'], 'cancel', 'owner', current['revision'])
+                self.assert_parent_eval_stopped(processes, 'cancelled')
+            self.assertEqual([True], restored)
+
+    def test_pause_during_parent_final_eval_preserves_paused_state(self):
+        with self.parent_eval_fixture('final') as processes:
+            current = self.view()
+            self.runtime.control(self.item['id'], 'pause', 'owner', current['revision'])
+            result = self.assert_parent_eval_stopped(processes, 'paused')
+            self.assertEqual('interrupted', self.workflow._load(self.item['id'])['stage'])
+            self.assertTrue(result['candidate_sha256'])
+            self.assertTrue(list((self.runtime_dir / 'daily-delivery/plan-fixture/subtasks').glob('*/changes.patch')))
+
+    def test_time_budget_during_parent_final_eval_stops_real_process(self):
+        with self.parent_eval_fixture('final') as processes:
+            current = self.view()
+            with self.runtime.lock:
+                data = self.runtime._load(self.item['id'])
+                data['started_at'] = time.time() - data['budget']['time_budget_seconds'] + .1
+                self.runtime._save(data)
+                self.runtime.timers[self.item['id']].cancel()
+                timer = threading.Timer(.1, self.runtime._time_exhausted, args=(self.item['id'], current['run_id']))
+                self.runtime.timers[self.item['id']] = timer
+                timer.start()
+            result = self.assert_parent_eval_stopped(processes, 'failed')
+            self.assertTrue(result['budget_exhausted'])
+            events = self.runtime.sessions.get_session(result['session_id'])['events']
+            self.assertTrue(any(e['kind']=='runtime/budget-stopped' for e in events))
+
+    def test_pause_after_parent_eval_return_cannot_publish_review(self):
+        original_append = self.tasks.append_event
+        controlled = []
+        def append(task_id, detail, **kwargs):
+            result = original_append(task_id, detail, **kwargs)
+            if detail == '日常研发交付包已保存':
+                current = self.view()
+                controlled.append(self.runtime.control(self.item['id'], 'pause', 'owner', current['revision']))
+            return result
+        with patch.object(self.tasks, 'append_event', side_effect=append), \
+                patch.object(self.runtime, 'runner_factory', self.parent_fixture_child_runner):
+            self.start()
+            result = self.wait()
+        self.assertEqual(1, len(controlled))
+        self.assertEqual('paused', result['state'], result.get('error'))
+        self.assertEqual('interrupted', self.workflow._load(self.item['id'])['stage'])
+        self.assertEqual('failed', self.tasks.get(result['task_id'])['status'])
+        self.assertTrue((self.runtime_dir / 'daily-delivery/plan-fixture/changes.patch').is_file())
+        self.assertEqual('1', (self.repository / 'a.txt').read_text())
+
+    def assert_bound_worker_stop_response(self, action):
+        from workbench.execution_control import local
+        self.runtime._begin(self.item['id'], self.plan)
+        with self.runtime.lock:
+            current = self.runtime._load(self.item['id'])
+            current['workspace'] = str(self.repository)
+            self.runtime._save(current)
+        event = self.runtime.events[self.item['id']]
+        previous = getattr(local, 'cancel_event', None)
+        local.cancel_event = event
+        try:
+            with patch('workbench.delivery_runtime.manifest', side_effect=AssertionError('stop response must not start Git')):
+                response = self.runtime.control(self.item['id'], action, 'owner', current['revision'])
+            self.assertIs(local.cancel_event, event)
+            self.assertTrue(event.is_set())
+            self.assertEqual(action, response['requested_control'])
+            self.assertEqual('', response['candidate_sha256'])
+            self.assertEqual('pending', response['candidate_verification'])
+            self.assertFalse(response['can_resume'])
+        finally:
+            local.cancel_event = previous
+        # Only a subsequent ordinary GET may supply a freshly checked hash.
+        with self.runtime.lock:
+            settled = self.runtime._load(self.item['id'])
+            settled['state'] = 'paused' if action == 'pause' else 'cancelled'
+            self.runtime._save(settled)
+        with patch('workbench.delivery_runtime.manifest', wraps=manifest) as actual_manifest:
+            refreshed = self.view()
+        actual_manifest.assert_called_once_with(self.repository, self.runtime_dir)
+        self.assertTrue(refreshed['candidate_sha256'])
+        self.assertEqual('verified', refreshed['candidate_verification'])
+        self.assertEqual(action == 'pause', refreshed['can_resume'])
+        if action == 'pause':
+            with self.assertRaisesRegex(ValueError, 'SHA-256'):
+                self.runtime.control(self.item['id'], 'resume', 'owner', refreshed['revision'], 'wrong')
+        self.assertTrue(event.is_set())
+
+    def test_pause_response_from_bound_worker_does_not_start_git(self):
+        self.assert_bound_worker_stop_response('pause')
+
+    def test_cancel_response_from_bound_worker_does_not_start_git(self):
+        self.assert_bound_worker_stop_response('cancel')
+
     def shared_api(self):
         api=HarnessPlatformAPI(self.runtime_dir,self.repository,tasks=self.tasks,projects=self.projects,
                                initiatives=self.items,runtime_store=self.runtime.sessions,delivery_runtime=self.runtime)
@@ -670,15 +941,43 @@ class DeliveryRuntimeTests(unittest.TestCase):
 
     def test_shared_session_pause_controls_the_actual_cli_run(self):
         api=self.shared_api()
+        with LocalWorker.ready_lock:LocalWorker.ready.clear()
         with patch.object(LocalWorker,'delay',10):
             self.start(); deadline=time.time()+5
-            while not any(c['status']=='running' for c in self.view()['subtasks']) and time.time()<deadline:time.sleep(.01)
+            while LocalWorker.ready != {'a.txt','b.txt'} and time.time()<deadline:time.sleep(.01)
+            self.assertEqual({'a.txt','b.txt'},LocalWorker.ready)
             current=self.view()
-            response=api.dispatch('POST','/api/v1/sessions/'+current['session_id']+'/status',
-                {'X-Workbench-Actor':'owner','Idempotency-Key':'shared-pause'},
+            with self.runtime.lock:
+                progress=self.runtime._load(self.item['id'])
+                progress['subtasks'][0]['progress']='explicit automated Session-route progress'
+                self.runtime._save(progress)
+            self.assertGreater(self.view()['revision'],current['revision'])
+            path='/api/v1/sessions/'+current['session_id']+'/status'
+            legacy=api.dispatch('POST',path,
+                {'X-Workbench-Actor':'owner','Idempotency-Key':'shared-stale-legacy'},
                 {'status':'paused','expected_revision':current['revision']})
+            self.assertEqual(422,legacy.status,legacy.body)
+            self.assertFalse(self.runtime.events[self.item['id']].is_set())
+            self.assertGreater(LocalWorker.active,0)
+            body={'status':'paused','expected_revision':current['revision'],
+                  'run_id':current['run_id'],'session_id':current['session_id'],
+                  'control_revision':current['control_revision']}
+            wrong=api.dispatch('POST',path,
+                {'X-Workbench-Actor':'owner','Idempotency-Key':'shared-wrong-attempt'},
+                {**body,'run_id':'another-run'})
+            self.assertEqual(422,wrong.status,wrong.body)
+            self.assertFalse(self.runtime.events[self.item['id']].is_set())
+            self.assertGreater(LocalWorker.active,0)
+            response=api.dispatch('POST',path,
+                {'X-Workbench-Actor':'owner','Idempotency-Key':'shared-pause'},
+                body)
             self.assertEqual(200,response.status,response.body)
-            self.assertEqual('paused',self.wait()['state'])
+            result=self.wait()
+            self.assertEqual('paused',result['state'])
+            self.assertEqual(current['run_id'],result['run_id'])
+            self.assertEqual(current['session_id'],result['session_id'])
+            self.assertEqual(current['control_revision']+1,result['control_revision'])
+            self.assertEqual(0,LocalWorker.active)
 
     def v2_trial(self, required_file='a.txt'):
         from eval.workbench_contracts import LocalDeliveryFixture

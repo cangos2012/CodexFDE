@@ -101,7 +101,7 @@ def lesson_number_from_requirement(requirement_id: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def lesson_eval_runner(lesson: int | None):
+def lesson_eval_runner(lesson: int | None, *, product_root=None):
     """Run only this lesson's declared cases. Task-scoped report is written by the workflow."""
     from eval.harness import run_suite
 
@@ -109,7 +109,12 @@ def lesson_eval_runner(lesson: int | None):
 
     def runner(suite: str, write_report: bool = True, case_names=None):
         _ = write_report
-        return run_suite(suite, False, case_names or cases)
+        from .external_project import verification_project
+        with verification_project(product_root):
+            report = run_suite(suite, False, case_names or cases)
+        if product_root:
+            report['verification_target'] = {'product_root': str(product_root)}
+        return report
 
     return runner
 

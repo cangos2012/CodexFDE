@@ -34,6 +34,10 @@ function invalidateInitiativeWork(message, clear=false) {
   if(typeof invalidatePlatformRuntime==='function')invalidatePlatformRuntime(message);
 }
 const iw = id => document.getElementById('iw-' + id);
+function initiativeReviewBase(data) {
+  const evidence=data.eval_harness || {},runner=evidence.runner || {};
+  return [data.active_task_id || data.task?.id || '',runner.candidate_sha256 || '',runner.report_path || '',evidence.generated_at ?? null];
+}
 const iwStages = {queued:'已排队，等待执行',cancelling:'正在取消并保留证据',cancelled:'已取消，可重新调研',interrupted:'服务重启，本轮中断，请核对后重试',released:'已发布，效果待观察',observed:'已回收实际效果',idle:'先让 Codex 检查已有实现',researching:'Codex 正在调研与整理问题',clarifying:'等待你回答业务问题',ready:'方案已提出，等待你确认',confirmed:'目标已确认，等待授权执行',executing:'正在修改与独立复验',review:'本轮候选等待验收',rework:'本轮需要修订，可在这里反馈',accepted:'候选已接受，等待确认集成',integrating:'正在核对并集成',integrated:'已集成到当前项目源码',failed:'本轮已停止，原记录保留'};
 function iwList(id, values) {
   iw(id).replaceChildren();
@@ -64,6 +68,11 @@ function renderIwAnswers(data, busy) {
 }
 function renderInitiativeWork(data) {
   if(typeof WorkbenchDrafts!=='undefined')WorkbenchDrafts.flush();
+  if(initiativeWork && (initiativeWork.id!==data.id ||
+      JSON.stringify(initiativeReviewBase(initiativeWork))!==JSON.stringify(initiativeReviewBase(data)))) {
+    if(typeof WorkbenchDrafts!=='undefined')WorkbenchDrafts.detach(['review']);
+    iw('note').value='';
+  }
   if(initiativeWorkReadable)document.getElementById('initiative-work').querySelectorAll?.('button').forEach(button=>button.disabled=false);
   renderEvalHarness(data);
   const loop=data.repair_loop || {config:{},history:[]};
@@ -233,6 +242,10 @@ async function initiativeWorkAction(action, extra={}) {
   const draftGroup=({discuss:'discussion',accept:'review',v0:'v0'})[action] ||
     (action==='learning' ? ({create:'learning-candidate',decide:'learning-decisions'})[extra.fields?.action] : null);
   const draftSnapshot=draftGroup && typeof WorkbenchDrafts!=='undefined' ? WorkbenchDrafts.capture?.(draftGroup) : null;
+  if(action==='accept' && (!extra.note?.trim() || draftSnapshot &&
+      draftSnapshot.base!==JSON.stringify(initiativeReviewBase(initiativeWork)))) {
+    iw('error').textContent='请核对当前候选和 Eval，填写属于本轮的验收意见后再接受。';return;
+  }
   const discussionInput=()=>({message:iw('message').value,
     answers:Object.fromEntries([...iw('answers').querySelectorAll('textarea')].map(el=>[el.dataset.question,el.value]))});
   const submittedDiscussion=action==='discuss' ? JSON.stringify(discussionInput()) : null;

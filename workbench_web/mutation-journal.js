@@ -34,10 +34,10 @@ var WorkbenchMutationJournal = (() => {
     for(const entry of entries) {
       const row=document.createElement('article');row.append(text('h3',entry.label),text('p','开始于 '+new Date(entry.started_at).toLocaleString()),text('pre',entry.operation+'\n提交键：'+entry.submission_key));
       const receipt=checked.get(id(entry));
-      const state=receipt ? ({pending:'原请求仍待核对，请核对当前事项。',completed:'请求已受理，请核对当前事项；这不代表交付完成。',failed:'原请求记录为失败，请核对当前事项与证据。',not_found:'尚未找到回执，请核对当前事项；不能据此认定未执行。'})[receipt] : '尚未核对原请求回执。';
+      const state=receipt ? ({pending:'原请求尚未确认结果；提示与提交键保留。请稍后只读核对回执和当前事项，确认前不要重新提交。',completed:'请求已受理，请核对当前事项；这不代表交付完成。',failed:'原请求记录为失败，请核对当前事项与证据。',not_found:'尚未找到回执，不能据此认定未执行；提示与提交键保留。请稍后只读核对回执和当前事项，确认前不要重新提交。'})[receipt] : '尚未核对原请求回执；提示与提交键保留，请先只读核对。';
       row.append(text('p',state));
       const read=text('button','只读核对原回执');read.type='button';read.disabled=reading.has(id(entry));read.onclick=()=>check(entry);
-      const end=text('button','我已核对，结束此提示');end.type='button';end.disabled=!receipt || reading.has(id(entry));end.onclick=()=>finish(entry);
+      const end=text('button','我已核对，结束此提示');end.type='button';end.disabled=!['completed','failed'].includes(receipt) || reading.has(id(entry));end.onclick=()=>finish(entry);
       row.append(read,end);list.append(row);
     }
   }
@@ -82,7 +82,14 @@ var WorkbenchMutationJournal = (() => {
   }
   function finish(entry) {
     if(!same(entry) || !checked.has(id(entry)) || reading.has(id(entry)))return;
-    try{persist(entries.filter(e=>id(e)!==id(entry)));checked.delete(id(entry));render('已结束本机提示；后端请求、授权和验收记录保持原状。');}
+    if(!['completed','failed'].includes(checked.get(id(entry)))){render('原请求结果尚未确认；待核对提示和原提交键已保留。请稍后只读核对回执和当前事项，确认前不要重新提交。');return;}
+    const failed=checked.get(id(entry))==='failed';
+    try{
+      persist(entries.filter(e=>id(e)!==id(entry)));
+      if(failed && typeof releaseFailedPlatformKey==='function')releaseFailedPlatformKey(entry.submission_key);
+      checked.delete(id(entry));
+      render('已结束本机提示；后端请求、授权和验收记录保持原状。'+(failed ? '原失败回执保留；核对当前状态后，再次点击提交会使用新的提交键，本次未发送请求。' : ''));
+    }
     catch(_){render('本机提示未能结束，原提交键保留。');}
   }
   function clear() {

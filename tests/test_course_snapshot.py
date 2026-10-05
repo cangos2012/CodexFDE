@@ -8,6 +8,7 @@ from unittest.mock import patch
 from pathlib import Path
 
 from workbench.course_snapshot import prepare_source_snapshot
+from workbench.file_io import read_bytes
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -86,12 +87,12 @@ class SourceSnapshotTests(unittest.TestCase):
             (source / ".env").write_text("private", encoding="utf-8")
             (source / "workbench/private.db").write_text("private", encoding="utf-8")
             (source / "workbench/auth.json").write_text("private", encoding="utf-8")
-            original = (source / "workbench/spec.py").read_bytes()
+            original = read_bytes(source / "workbench/spec.py")
             result = prepare_source_snapshot(source, source / ".runtime", 3)
             target = Path(result["path"])
             self.assertEqual("working_tree_snapshot", result["baseline_semantics"])
             self.assertFalse((source / ".git").exists())
-            self.assertEqual(original, (source / "workbench/spec.py").read_bytes())
+            self.assertEqual(original, read_bytes(source / "workbench/spec.py"))
             self.assertIn("if False and missing", (target / "workbench/spec.py").read_text(encoding="utf-8"))
             self.assertFalse((target / ".env").exists())
             self.assertFalse((target / "workbench/private.db").exists())

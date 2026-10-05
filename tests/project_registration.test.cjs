@@ -4,7 +4,7 @@ const vm=require('node:vm');
 const fs=require('node:fs');
 const path=require('node:path');
 
-function setup(){
+function setup({journal=false}={}){
   const nodes=new Map();
   const element=tag=>({tag,value:'',textContent:'',checked:false,disabled:false,hidden:false,children:[],
     append(...children){this.children.push(...children);},replaceChildren(){this.children=[];},
@@ -12,15 +12,20 @@ function setup(){
     scrollIntoView(){},focus(){this.focused=true;},showModal(){this.open=true;},close(){this.open=false;}});
   const document={createElement:element,getElementById(id){if(!nodes.has(id))nodes.set(id,element('div'));return nodes.get(id);}};
   const calls=[];
-  const context=vm.createContext({document,console,encodeURIComponent,actorName:()=> 'fixture-user',
+  const store=require('./web_dom.cjs').storage();
+  const context=vm.createContext({document,console,encodeURIComponent,Date,URLSearchParams,crypto:require('node:crypto').webcrypto,localStorage:store,actorName:()=> 'fixture-user',
     show:(id,text)=>document.getElementById(id).textContent=text,workspaceView:()=>{},api:async(url,options)=>{
       calls.push({url,body:JSON.parse(options.body)});
       return {id:'PROJECT-NEW',name:'项目',root_path:'D:/projects/new',eval_command:[]};
     }});
+  if(journal){
+    for(const name of ['mutation-journal.js','platform.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'../workbench_web/'+name),'utf8'),context);
+    context.WorkbenchMutationJournal.init('REGISTRATION-FIXTURE',store);
+  }
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../workbench_web/initiatives.js'),'utf8'),context);
   context.loadInitiativeProjects=async()=>{};
   context.editRegisteredProject();
-  return {context,document,calls,nodes};
+  return {context,document,calls,nodes,store};
 }
 
 test('local folder is submitted without requiring an Eval command',async()=>{
@@ -86,4 +91,38 @@ test('an older running backend cannot receive unsupported registration requests'
   assert.match(document.getElementById('project-status').textContent,/重启工作台/);
   context.renderRegisteredProjects({items:[],registration:{sources:['local','git']}});
   assert.equal(document.getElementById('project-register').disabled,false);
+});
+
+test('the same registration form can explicitly try again after a checked failure without replaying or removing the old receipt',async()=>{
+  const {context,document,calls,store}=setup({journal:true}),receipts=new Map();let directoryValid=false,attempts=0;
+  context.api=async(url,options)=>{
+    const method=options?.method || 'GET';calls.push({url,method});
+    if(method==='GET'){
+      const query=new URLSearchParams(url.split('?')[1]),operation=query.get('operation'),key=query.get('key');
+      return {operation,key,status:receipts.get(key)?.status || 'not_found',automatic_replay:false};
+    }
+    const body=JSON.parse(options.body),old=receipts.get(body.submission_key);
+    if(old?.status==='failed')throw Error('目录属于另一个仓库');
+    attempts++;
+    if(!directoryValid){receipts.set(body.submission_key,{status:'failed',body});throw Error('目录属于另一个仓库');}
+    receipts.set(body.submission_key,{status:'completed',body});
+    return {id:'PROJECT-FIXTURE',name:body.name,root_path:body.root_path,eval_command:[]};
+  };
+  const reopen=()=>{
+    document.getElementById('open-project-registration').onclick();
+    document.getElementById('project-name').value='隔离项目登记夹具';document.getElementById('project-root').value='D:/fixture/project';
+  };
+  const submit=()=>document.getElementById('project-register').onclick();
+  reopen();await submit();assert.equal(attempts,1);
+  assert.match(document.getElementById('project-status').textContent,/属于另一个仓库/);
+  const storageKey='workbench-mutation-journal-v1:REGISTRATION-FIXTURE',entry=JSON.parse(store.getItem(storageKey))[0],oldKey=entry.submission_key;
+  directoryValid=true;reopen();await submit();assert.equal(attempts,1);assert.equal(calls.filter(c=>c.method==='POST').length,1);
+  await context.WorkbenchMutationJournal.check(entry);context.WorkbenchMutationJournal.finish(entry);
+  assert.equal(calls.filter(c=>c.method==='POST').length,1);assert.equal(receipts.get(oldKey).status,'failed');
+  reopen();await submit();assert.equal(attempts,2);assert.equal(calls.filter(c=>c.method==='POST').length,2);
+  const newKey=[...receipts.keys()].find(key=>key!==oldKey);assert.ok(newKey);assert.equal(receipts.get(newKey).status,'completed');
+  const withoutKey=body=>{const {submission_key,...fields}=body;return fields;};assert.deepEqual(withoutKey(receipts.get(newKey).body),withoutKey(receipts.get(oldKey).body));
+  assert.equal(receipts.get(oldKey).status,'failed');assert.equal(JSON.parse(store.getItem(storageKey)).length,0);
+  assert.doesNotMatch([...store.data.values()].join(''),/fixture-user|root_path|preview_config|actor/);
+  assert.match(document.getElementById('project-status').textContent,/已保存项目/);
 });

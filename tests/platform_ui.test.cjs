@@ -4,6 +4,8 @@ function setup() {
   const ui=dom(),store=storage(),calls=[];
   const create=ui.document.createElement;
   ui.document.createElement=tag=>{const el=create(tag);el.addEventListener=(event,fn)=>el['on'+event]=fn;el.remove=()=>{if(el.parent)el.parent.children=el.parent.children.filter(c=>c!==el);};
+    el.insertBefore=(child,before)=>{child.remove?.();const index=el.children.indexOf(before);if(index<0)el.children.push(child);else el.children.splice(index,0,child);child.parent=el;return child;};
+    const query=el.querySelector;el.querySelector=selector=>selector==='h4' ? el.children.find(child=>child.tag==='h4') || null : query.call(el,selector);
     const append=el.append;el.append=(...children)=>{children.forEach(c=>c.parent=el);append.call(el,...children);};return el;};
   const get=ui.document.getElementById;
   ui.document.getElementById=id=>{const el=get(id);el.addEventListener=(event,fn)=>el['on'+event]=fn;return el;};
@@ -25,6 +27,84 @@ function setup() {
 }
 function workflow(id='I1') {return {id,revision:4,stage:'review',enabled:true,messages:[],iterations:[],documents:[],progress:[],project:{id:'P1',deployment_profiles:[]},task:{id:'TASK-A',status:'review',events:[]},eval_harness:{available:true,freshness:'current',summary:{decision:'pass',passed:1,total:1},results:[]},learning:{assets:[],bindings:[],metrics:{}},learning_sources:{tasks:[],feedback:[]}};}
 function runtime(id='I1'){return {initiative_id:id,run_id:'RUN-A',revision:3,state:'confirmed',task_id:'TASK-A',profile_id:'PROFILE-A',profiles:[{id:'PROFILE-A',name:'默认'}],candidate_sha256:'sha-A',subtasks:[],approvals:[],budget:{token_budget:100,max_workers:2},can_pause:false,can_resume:true,can_cancel:true};}
+function withDrafts(a) {
+  vm.runInContext(fs.readFileSync('workbench_web/drafts.js','utf8'),a.context);
+  a.context.WorkbenchDrafts.init('runtime-A',a.store);
+  a.node('iw-result').append(a.node('iw-note'));
+  a.node('project-plan-dialog').append(a.node('plan-objective'),a.node('plan-architecture'),a.node('plan-rows'),a.node('plan-save'));
+  return a;
+}
+function edit(a,id,value) {a.node(id).value=value;a.listeners.get('input')({target:a.node(id)});}
+function reviewedWorkflow(task='TASK-A',report='REPORT-A',sha='sha-A') {
+  return {...workflow(),active_task_id:task,task:{id:task,status:'review',events:[]},
+    eval_harness:{...workflow().eval_harness,runner:{candidate_sha256:sha,report_path:report},generated_at:1}};
+}
+
+test('background plan revision changes preserve the editor draft and block stale saves',async()=>{
+  const a=withDrafts(setup());a.node('home-project').value='P1';
+  let plan={project_id:'P1',revision:1,objective:'first plan',architecture_refs:[],milestones:[]};
+  a.context.api=async(url,options)=>{a.calls.push({url,body:options?.body?JSON.parse(options.body):null});return plan;};
+  await a.context.refreshPlatformProjectPlan(true);a.context.openProjectPlan();edit(a,'plan-objective','my version-one draft');
+  plan={...plan,revision:2,objective:'another human updated this plan'};
+  await a.context.refreshPlatformProjectPlan(true);await a.context.saveProjectPlan();
+  assert.equal(a.calls.filter(call=>call.body).length,0);
+  assert.equal(a.node('plan-objective').value,'my version-one draft');assert.equal(a.node('plan-objective').disabled,false);
+  assert.equal(a.node('plan-save').disabled,true);assert.match(a.node('plan-error').textContent,/版本|变化/);
+  assert.equal(JSON.parse(a.context.WorkbenchDrafts.capture('project-plan').base),1);
+  a.context.initPlatform();a.node('project-plan-close').onclick();a.context.openProjectPlan();
+  assert.equal(a.node('plan-objective').value,plan.objective);assert.equal(a.node('plan-save').disabled,false);
+  assert.match(a.node('draft-project-plan').querySelector('pre').textContent,/my version-one draft/);
+  assert.equal(a.node('draft-project-plan').querySelectorAll('button').some(b=>b.textContent==='恢复草稿'),false);
+});
+
+test('switching projects cannot retarget an already open plan editor',async()=>{
+  const a=withDrafts(setup());a.node('home-project').value='P1';
+  a.context.api=async(url,options)=>{a.calls.push({url,body:options?.body?JSON.parse(options.body):null});return {project_id:a.node('home-project').value,revision:1,objective:'plan',milestones:[]};};
+  await a.context.refreshPlatformProjectPlan(true);a.context.openProjectPlan();edit(a,'plan-objective','P1 only');
+  a.node('home-project').value='P2';await a.context.refreshPlatformProjectPlan(true);await a.context.saveProjectPlan();
+  assert.equal(a.calls.filter(call=>call.body).length,0);assert.equal(a.node('plan-objective').value,'P1 only');
+  assert.equal(a.node('plan-save').disabled,true);assert.match(a.node('plan-error').textContent,/项目|变化/);
+});
+
+for(const [label,next] of [
+  ['task',reviewedWorkflow('TASK-B','REPORT-B','sha-B')],
+  ['candidate',reviewedWorkflow('TASK-A','REPORT-A','sha-B')],
+  ['Eval',reviewedWorkflow('TASK-A','REPORT-B','sha-A')],
+]) test('a new '+label+' clears live acceptance text while preserving only the old review draft',async()=>{
+  const a=withDrafts(setup()),first=reviewedWorkflow();a.state(first);a.context.renderInitiativeWork(first);
+  edit(a,'iw-note','review evidence belonging to the first candidate');
+  a.context.renderInitiativeWork({...next,revision:9});
+  assert.equal(a.node('iw-note').value,'');assert.match(a.node('draft-review').querySelector('pre').textContent,/first candidate/);
+  assert.equal(a.node('draft-review').querySelectorAll('button').some(b=>b.textContent==='恢复草稿'),false);
+  a.context.api=async(url,options)=>{a.calls.push({url,body:options?.body?JSON.parse(options.body):null});return {...next,revision:10};};
+  await a.context.initiativeWorkAction('accept',{note:a.node('iw-note').value});
+  assert.equal(a.calls.filter(call=>call.body).length,0);assert.match(a.node('iw-error').textContent,/验收意见/);
+});
+
+test('unchanged candidate and Eval preserve current review input across polling',()=>{
+  const a=withDrafts(setup()),work=reviewedWorkflow();a.state(work);a.context.renderInitiativeWork(work);
+  edit(a,'iw-note','still reviewing this candidate');a.context.renderInitiativeWork({...work,revision:9});
+  assert.equal(a.node('iw-note').value,'still reviewing this candidate');
+});
+
+test('another approval changing or arriving preserves the same pending approval reason',async()=>{
+  const a=setup();a.state();const approval={id:'AP-A',tool_id:'file.write',status:'pending',args:{path:'a.txt'},args_sha256:'ARGS-A',candidate_sha256:'sha-A'};
+  let data={...runtime(),approvals:[approval,{...approval,id:'AP-B',args_sha256:'ARGS-B'}]};a.context.api=async()=>data;
+  await a.context.refreshPlatformRuntime();const card=a.node('iw-runtime-approvals').children[0];card.querySelector('textarea').value='reviewed AP-A scope';
+  data={...data,revision:4,approvals:[approval,{...data.approvals[1],status:'allowed'},{...approval,id:'AP-C'}]};
+  await a.context.refreshPlatformRuntime();assert.equal(a.node('iw-runtime-approvals').children[0],card);
+  assert.equal(card.querySelector('textarea').value,'reviewed AP-A scope');
+});
+
+for(const [label,change] of [
+  ['args SHA',{args_sha256:'ARGS-NEW'}],['parameters',{args:{path:'b.txt'}}],['candidate',{candidate_sha256:'sha-B'}],
+]) test('a changed approval '+label+' cannot inherit its old human reason',async()=>{
+  const a=setup();a.state();const approval={id:'AP-A',tool_id:'file.write',status:'pending',args:{path:'a.txt'},args_sha256:'ARGS-A',candidate_sha256:'sha-A'};
+  let data={...runtime(),approvals:[approval]};a.context.api=async()=>data;await a.context.refreshPlatformRuntime();
+  const card=a.node('iw-runtime-approvals').children[0];card.querySelector('textarea').value='only for the original request';
+  data={...data,revision:4,approvals:[{...approval,...change}]};await a.context.refreshPlatformRuntime();
+  assert.notEqual(a.node('iw-runtime-approvals').children[0],card);assert.equal(a.node('iw-runtime-approvals').querySelector('textarea').value,'');
+});
 
 test('failed initiative polling freezes acceptance and authorization while preserving text',async()=>{
   const a=setup();a.state();a.node('iw-note').value='unsent evidence';a.node('iw-accept').disabled=false;
@@ -58,6 +138,59 @@ test('resume and one-time authorization send frozen identity, human reason and r
   const call=a.calls.find(c=>c.url.endsWith('/runtime/control'));assert.equal(call.body.actor,'operator');assert.equal(call.body.expected_revision,3);assert.equal(call.body.candidate_sha256,'sha-A');assert.ok(call.body.submission_key);
   await a.context.runtimeAction('approvals/AP-A',{decision:'allow',note:'verified scope'});
   assert.equal(a.calls.find(c=>c.url.endsWith('/approvals/AP-A')).body.note,'verified scope');
+});
+async function controlFixture(a,data) {
+  a.state({...workflow(),stage:'executing'});a.context.controlView=data;
+  a.context.api=async(url,options)=>{
+    a.calls.push({url,body:options?.body?JSON.parse(options.body):null});
+    if(options?.method==='POST' || url.endsWith('/runtime'))return a.context.controlView;
+    if(url.endsWith('/workflow'))return {...workflow(),stage:'executing'};
+    if(url.endsWith('/plan'))return {project_id:'P1',revision:1,milestones:[]};
+    if(url.endsWith('/deployments'))return {items:[],plans:[]};
+    throw Error('unexpected control fixture read '+url);
+  };
+  a.context.initPlatform();await a.context.refreshPlatformRuntime();
+}
+function boundControlRuntime() {return {...runtime(),state:'running',session_id:'SESSION-A',control_revision:7,can_pause:true};}
+for(const action of ['pause','cancel'])test(action+' binds the control attempt even when background progress has advanced the payload revision',async()=>{
+  const a=setup();await controlFixture(a,boundControlRuntime());
+  const original=a.context.api;
+  a.context.api=async(url,options)=>{
+    if(options?.method==='POST')a.context.controlView={...a.context.controlView,revision:40};
+    return original(url,options);
+  };
+  await a.node('iw-runtime-'+action).onclick();
+  const body=a.calls.find(call=>call.url.endsWith('/runtime/control')).body;
+  assert.equal(body.action,action);assert.equal(body.expected_revision,3);assert.equal(body.control_revision,7);
+  assert.equal(body.run_id,'RUN-A');assert.equal(body.session_id,'SESSION-A');assert.equal(body.actor,'operator');assert.ok(body.submission_key);
+  assert.equal(a.calls.filter(call=>call.url.endsWith('/runtime/control')).length,1);
+});
+test('an existing control button uses the latest attempt tuple rather than the previous render snapshot',async()=>{
+  const a=setup();await controlFixture(a,boundControlRuntime());const pause=a.node('iw-runtime-pause').onclick;
+  a.context.controlView={...boundControlRuntime(),run_id:'RUN-B',session_id:'SESSION-B',revision:9,control_revision:8,candidate_sha256:'sha-B'};
+  await a.context.refreshPlatformRuntime();await pause();
+  const body=a.calls.find(call=>call.url.endsWith('/runtime/control')).body;
+  assert.equal(body.run_id,'RUN-B');assert.equal(body.session_id,'SESSION-B');assert.equal(body.control_revision,8);
+  assert.equal(body.expected_revision,9);assert.equal(body.candidate_sha256,'sha-B');
+});
+for(const missing of ['run_id','session_id','control_revision'])test('legacy control view missing '+missing+' sends none of the new CAS tuple',async()=>{
+  const a=setup(),data=boundControlRuntime();delete data[missing];await controlFixture(a,data);
+  await a.node('iw-runtime-cancel').onclick();const body=a.calls.find(call=>call.url.endsWith('/runtime/control')).body;
+  for(const field of ['run_id','session_id','control_revision'])assert.equal(Object.hasOwn(body,field),false,field);
+  assert.equal(body.expected_revision,3);assert.equal(body.action,'cancel');assert.ok(body.submission_key);
+});
+test('resume remains bound to the strict payload revision and candidate without stop-control CAS fields',async()=>{
+  const a=setup();await controlFixture(a,{...boundControlRuntime(),state:'paused',revision:9,can_resume:true});
+  await a.node('iw-runtime-resume').onclick();const body=a.calls.find(call=>call.url.endsWith('/runtime/control')).body;
+  assert.equal(body.action,'resume');assert.equal(body.expected_revision,9);assert.equal(body.candidate_sha256,'sha-A');
+  for(const field of ['run_id','session_id','control_revision'])assert.equal(Object.hasOwn(body,field),false,field);
+});
+test('a rejected stop-control CAS freezes its current view without replaying the request',async()=>{
+  const a=setup();await controlFixture(a,boundControlRuntime());const original=a.context.api;
+  a.context.api=async(url,options)=>{if(options?.method==='POST'){a.calls.push({url,body:JSON.parse(options.body)});throw Error('fixture control changed');}return original(url,options);};
+  await a.node('iw-runtime-pause').onclick();
+  assert.equal(a.calls.filter(call=>call.url.endsWith('/runtime/control')).length,1);
+  assert.equal(vm.runInContext('platformState.runtimeReadable',a.context),false);assert.match(a.node('iw-runtime-status').textContent,/待核对/);
 });
 test('subtask editor sends explicit read/write/resource sets and invalidates prepared starts on edits',()=>{
   const a=setup();a.state();a.context.initPlatform();a.context.addSubtaskRow({name:'review',prompt:'check behavior',read_set:['src/a.py'],write_set:[],resource_set:['report']});

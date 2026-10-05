@@ -13,6 +13,7 @@ from .process_guard import spawn
 from .desktop import wait_for_product_release
 from .managed_process import ManagedProcess
 from .deployment_process import probe
+from .reference_paths import resolve_reference
 
 
 class CandidatePreviews:
@@ -92,7 +93,7 @@ class CandidatePreviews:
         daily_ready = package.get('status') == 'review' and (task.get('result') or {}).get('summary', {}).get('decision') == 'pass'
         if task['status'] not in {'review', 'completed'} or not (gate.get('accepted') or daily_ready):
             raise ValueError('本次候选成果还未完成范围与自动检查，请先查看交付证据')
-        workspace = Path(package['workspace']) if daily_ready else self.runtime / 'course-worktrees' / task_id
+        workspace = resolve_reference(package['workspace'], self.runtime) if daily_ready else self.runtime / 'course-worktrees' / task_id
         if workspace.is_symlink() or not workspace.resolve().is_relative_to(self.runtime) or not (workspace/'web/index.html').is_file():
             raise ValueError('本次隔离成果不在原运行目录，或尚无可预览的客户界面')
         execution = next((e.get('evidence') or {} for e in reversed(task['events'])

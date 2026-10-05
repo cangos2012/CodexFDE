@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 import os
 import secrets
 import subprocess
@@ -35,6 +36,8 @@ class InitiativeWorkflow:
         self.enabled = enabled
         self.projects = projects
         self.cancel_events = {}
+        self.closed = False
+        self.shutdown_errors = []
         self.researcher = researcher or InitiativeResearch()
         self.submitter = submitter or submit_daily
         self.lock = threading.RLock()
@@ -570,6 +573,8 @@ class InitiativeWorkflow:
                          [m['text'] for m in data['messages'] if m['role'] == 'user'])[-30000:]
 
     def _launch(self, data, function, *args):
+        if self.closed:
+            raise ValueError('工作台正在关闭，不能启动新的事项工作')
         self.cancel_events[data['id']] = threading.Event()
         self._save(data)
         thread = threading.Thread(target=self._worker, args=(data['id'], function, args), daemon=True)
@@ -579,33 +584,46 @@ class InitiativeWorkflow:
     def _worker(self, item_id, function, args):
         from contextlib import ExitStack
         from .maintenance import MaintenanceBusy, MaintenanceGate
-        with ExitStack() as ownership:
-            while True:
-                try:
-                    ownership.enter_context(MaintenanceGate(self.runtime).write())
-                    break
-                except MaintenanceBusy:
-                    time.sleep(.05)
-            self._worker_owned(item_id, function, args)
-
-    def _worker_owned(self, item_id, function, args):
         from .execution_control import local, checkpoint
+        previous_event = getattr(local, 'cancel_event', None)
         local.cancel_event = self.cancel_events[item_id]
         try:
-            checkpoint()
-            function(item_id, *args)
-            checkpoint()
+            with ExitStack() as ownership:
+                while True:
+                    checkpoint()
+                    try:
+                        ownership.enter_context(MaintenanceGate(self.runtime).write())
+                        break
+                    except MaintenanceBusy:
+                        self.cancel_events[item_id].wait(.05)
+                self._worker_owned(item_id, function, args)
         except Exception as error:
-            with self.lock:
-                data = self._load(item_id)
-                data.update(stage='cancelled' if self.cancel_events[item_id].is_set() else 'failed', error=f'{type(error).__name__}: {error}')
-                self._event(data, 'system', data['error'])
-                if data.get('active_task_id'):
-                    task = self.tasks.get(data['active_task_id'])
-                    if task['status'] in {'queued', 'spec_ready', 'executing', 'evaluating', 'review', 'rework'}:
-                        self.tasks.transition(task['id'], 'failed', '事项执行失败，原记录保留', error=str(error))
-                    self.learning.finish(task['id'], note=str(error))
-                self._save(data)
+            try:
+                self._worker_failed(item_id, error)
+            except Exception as persistence_error:
+                message = '事项中断状态未能保存：' + str(persistence_error)
+                self.shutdown_errors.append(message)
+                logging.getLogger(__name__).warning('%s；原错误：%s', message, error)
+        finally:
+            local.cancel_event = previous_event
+
+    def _worker_owned(self, item_id, function, args):
+        from .execution_control import checkpoint
+        checkpoint()
+        function(item_id, *args)
+        checkpoint()
+
+    def _worker_failed(self, item_id, error):
+        with self.lock:
+            data = self._load(item_id)
+            data.update(stage='cancelled' if self.cancel_events[item_id].is_set() else 'failed', error=f'{type(error).__name__}: {error}')
+            self._event(data, 'system', data['error'])
+            if data.get('active_task_id'):
+                task = self.tasks.get(data['active_task_id'])
+                if task['status'] in {'queued', 'spec_ready', 'executing', 'evaluating', 'review', 'rework'}:
+                    self.tasks.transition(task['id'], 'failed', '事项执行失败，原记录保留', error=str(error))
+                self.learning.finish(task['id'], note=str(error))
+            self._save(data)
 
     def _progress(self, item_id, line):
         invocation = None

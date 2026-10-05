@@ -38,7 +38,8 @@ class HarnessPlatformTests(unittest.TestCase):
     def test_registered_project_drives_eval_and_stops_at_review(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary); repo = self._repo(root); api = HarnessPlatformAPI(root / "harness", repo)
-            report = {"summary": {"decision": "pass", "blocking_failed": 0, "blocking_passed": 1}, "results": []}
+            report = {"summary": {"total": 1, "passed": 1, "decision": "pass", "blocking_failed": 0, "observing_failed": 0},
+                      "results": [{"name": "project-fixture", "level": "blocking", "passed": True}]}
             script = "import pathlib,sys;pathlib.Path(sys.argv[1]).write_text(" + repr(json.dumps(report)) + ",encoding='utf-8')"
             project_headers = {"x-workbench-actor": "operator-a", "idempotency-key": "project-1"}
             api.dispatch("POST", "/api/v1/projects", project_headers, {
@@ -180,8 +181,8 @@ class HarnessPlatformTests(unittest.TestCase):
             repo = self._repo(root)
             api = HarnessPlatformAPI(root / "harness", repo)
             report = {
-                "summary": {"decision": "pass", "blocking_failed": 0, "blocking_passed": 1},
-                "results": [],
+                "summary": {"total": 1, "passed": 1, "decision": "pass", "blocking_failed": 0, "observing_failed": 0},
+                "results": [{"name": "project-fixture", "level": "blocking", "passed": True}],
             }
             script = (
                 "import pathlib,sys,time;time.sleep(0.8);pathlib.Path(sys.argv[1]).write_text("

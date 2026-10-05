@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from workbench import file_io
 from workbench.project_delivery import CandidateProjectEval
+from workbench.execution import CodexExecutionRunner
 
 REAL_SLEEP = time.sleep
 
@@ -43,9 +44,16 @@ class ProjectReportReadTests(unittest.TestCase):
             return original(target, mode, *args, **kwargs)
 
         result = subprocess.CompletedProcess(['fixture-eval'], 0, json.dumps(self.report), '')
+        actual_run = CodexExecutionRunner._run_codex_streaming
+
+        def run(runner, command, *args, **kwargs):
+            if command == ['fixture-eval']:
+                return result
+            return actual_run(runner, command, *args, **kwargs)
+
         with patch.object(file_io, '_WINDOWS', True), patch.object(Path, 'open', locked), \
                 patch.object(file_io.time, 'sleep', wraps=REAL_SLEEP), \
-                patch('workbench.execution.CodexExecutionRunner._run_codex_streaming', return_value=result):
+                patch.object(CodexExecutionRunner, '_run_codex_streaming', run):
             return self.runner(), failures
 
     def test_transient_lock_returns_hash_of_verified_persisted_report(self):
@@ -60,8 +68,8 @@ class ProjectReportReadTests(unittest.TestCase):
     def test_persistent_denial_cannot_return_successful_evidence(self):
         with self.assertRaises(PermissionError):
             self.run_locked(permanent=True)
-        self.assertEqual(1, len(list(self.runtime.rglob('process.json'))))
-        self.assertEqual(1, len(list(self.runtime.rglob('raw-report.json'))))
+        self.assertEqual(1, len(list((self.runtime / 'project-reports').rglob('process.json'))))
+        self.assertEqual(1, len(list((self.runtime / 'project-reports').rglob('raw-report.json'))))
 
     def test_report_changed_during_read_retry_is_rejected(self):
         with self.assertRaisesRegex(RuntimeError, '报告写入后变化'):

@@ -71,7 +71,8 @@ class ProjectRegistration:
             raise ValueError('请填写项目名称（最多 120 字）')
         if not isinstance(location, str) or not location.strip() or not Path(location).is_absolute():
             raise ValueError('请填写本地目录的绝对路径')
-        root = Path(location.strip()).resolve()
+        # Reject internal source before clone/init can create files or Git metadata.
+        root = self.projects.validate_root_source(location.strip())
         if root == root.parent:
             raise ValueError('请使用具体项目目录，不能将磁盘根目录作为项目')
         command = self.command(body.get('eval_command'))

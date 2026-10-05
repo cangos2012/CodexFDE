@@ -73,6 +73,23 @@ class WorkbenchBackupTests(unittest.TestCase):
         self.assertEqual('actual fixture failure', task['events'][1]['detail'])
         self.assertFalse(restored['automatic_replay'])
 
+    def test_owned_git_receipts_and_raw_source_listing_survive_restore(self):
+        folder = self.runtime / 'git-processes' / 'manifest-call'
+        folder.mkdir(parents=True)
+        raw = '中文文件'.encode('utf-8') + b'\x00\xff\r\n'
+        (folder / 'stdout.bin').write_bytes(raw)
+        receipt = json.dumps({'command': ['git', 'ls-files', '-z'], 'returncode': 130,
+                              'stdout_sha256': hashlib.sha256(raw).hexdigest(), 'success': False}).encode('utf-8')
+        (folder / 'process.json').write_bytes(receipt)
+        _, archive = self.archived()
+        verified = verify_backup(archive)
+        self.assertTrue(verified['ok'])
+        self.runtime.rename(self.root / 'retained-original')
+        restored = restore_backup(archive, self.runtime)
+        self.assertTrue(restored['ok'])
+        self.assertEqual(raw, (folder / 'stdout.bin').read_bytes())
+        self.assertEqual(receipt, (folder / 'process.json').read_bytes())
+
     def test_busy_gate_rejects_writes_in_thread_and_other_process(self):
         errors = []
         with MaintenanceGate(self.runtime).exclusive():

@@ -209,7 +209,9 @@ class DailyRuntimeCompatibilityTests(unittest.TestCase):
             else:
                 self.fail('isolated CLI fixture never reached its real process marker')
             current = self.runtime.view(self.item['id'])
-            self.runtime.control(self.item['id'], 'pause', 'owner', current['revision'])
+            self.runtime.control(self.item['id'], 'pause', 'owner', current['revision'],
+                                 run_id=current['run_id'], session_id=current['session_id'],
+                                 control_revision=current['control_revision'])
             result = self.wait()
         self.assertEqual('paused', result['state'])
         self.assertEqual('1', (self.repository / 'a.txt').read_text())

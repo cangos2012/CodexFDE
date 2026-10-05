@@ -11,6 +11,8 @@ from .platform_api import HarnessPlatformAPI
 from .harness_compatibility import HarnessCompatibilityProxy
 from .platform_bootstrap import bootstrap_default_project
 from .http_bind import ServerBindError, create_http_server, report_bind_error
+from .http_origin import local_request_error
+from .http_reliability import finish_rejected_response
 from .managed_flowerp import (
     FlowERPStartupError,
     ManagedFlowERP,
@@ -64,6 +66,9 @@ def make_handler(api: HarnessPlatformAPI):
             return True
 
         def do_GET(self) -> None:  # noqa: N802
+            rejected = local_request_error(self.headers, self.server.server_port)
+            if rejected:
+                return self._send(403, rejected)
             if self._api(): return
             path = urlparse(self.path).path
             relative = "index.html" if path == "/" else path.lstrip("/")
@@ -86,8 +91,11 @@ def make_handler(api: HarnessPlatformAPI):
                 return
 
         def do_POST(self) -> None:  # noqa: N802
-            if self.headers.get('Origin') and self.headers['Origin'] != 'http://' + self.headers.get('Host', ''):
-                return self._send(403, {'error':'cross_origin', 'message':'拒绝跨来源写入'})
+            rejected = local_request_error(self.headers, self.server.server_port, write=True)
+            if rejected:
+                self.close_connection = True
+                self._send(403, rejected)
+                return finish_rejected_response(self)
             try: body = self._body()
             except (ValueError, json.JSONDecodeError) as exc:
                 return self._send(400, {"error": "invalid_json", "message": str(exc)})

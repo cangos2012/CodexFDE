@@ -2,6 +2,7 @@
 let platformState={itemId:null,epoch:0,runtime:null,runtimeReadable:false,runtimePending:false,runtimeRead:0,runtimeAt:0,
   deployment:null,deployments:null,rollback:null,deploymentReadable:false,deploymentRead:0,deploymentAt:0,preview:null,subtaskDirty:false,initiativePlan:null,planAt:0,planRead:0,planError:''};
 let projectPlanState={id:null,data:null,read:0,readable:false,at:0,pending:false};
+let projectPlanEditor=null;
 let migrationState={plan:null,package:null,pending:false,intent:''};
 const platformKeys=new Map();
 let candidatePreviewSerial=0;
@@ -12,6 +13,11 @@ function platformKey(operation,fields) {
   const signature=operation+':'+JSON.stringify(fields);
   if(!platformKeys.has(signature))platformKeys.set(signature,crypto.randomUUID());
   return platformKeys.get(signature);
+}
+function releaseFailedPlatformKey(key) {
+  // Called only after a failed receipt was checked and its local hint explicitly ended.
+  // Forget this attempt's key; do not issue a request or change any other cached intent.
+  for(const [signature,value] of platformKeys)if(value===key)platformKeys.delete(signature);
 }
 function platformBody(operation,fields,revision) {
   const actor=actorName();
@@ -29,6 +35,40 @@ function platformInput(label,value='',tag='input',field='') {
   if(tag==='textarea')input.rows=2;box.append(input);return {box,input};
 }
 function platformDisable(host,disabled){const frozen=typeof workbenchWritesFrozen==='function' && workbenchWritesFrozen();pe(host)?.querySelectorAll('button,input,select,textarea').forEach(el=>el.disabled=disabled || frozen);}
+function runtimeApprovalIdentity(data,approval) {
+  return JSON.stringify([data.initiative_id,data.run_id,data.task_id,data.candidate_sha256,
+    approval.id,approval.tool_id,approval.args_sha256,approval.args,approval.candidate_sha256]);
+}
+function renderRuntimeApprovals(data,busy,advanced) {
+  const host=pe('iw-runtime-approvals');
+  const previous=new Map([...host.children].map(row=>[row.dataset.approvalIdentity,row]));
+  const rows=[];
+  for(const approval of data.approvals || []) {
+    const identity=runtimeApprovalIdentity(data,approval);
+    let row=previous.get(identity);
+    if(!row || row.dataset.approvalStatus!==approval.status) {
+      row=document.createElement('article');row.dataset.approvalIdentity=identity;row.dataset.approvalStatus=approval.status;
+      row.append(ptext('h4',''),ptext('pre',''));
+      if(approval.status==='pending') {
+        const note=platformInput('本次允许或拒绝的依据','','textarea');row.append(note.box);
+        for(const [decision,label] of [['allow','核对以上动作，允许一次'],['deny','拒绝本次动作']]) {
+          const button=ptext('button',label);button.type='button';
+          button.onclick=()=>runtimeAction('approvals/'+encodeURIComponent(approval.id),{decision,note:note.input.value.trim()});row.append(button);
+        }
+      }
+    }
+    row.querySelector('h4').textContent=approval.tool_id+' · '+approval.status;
+    row.querySelector('pre').textContent=JSON.stringify({id:approval.id,args:approval.args,args_sha256:approval.args_sha256,candidate_sha256:approval.candidate_sha256,actor:approval.actor,note:approval.note},null,2);
+    rows.push(row);
+  }
+  if(!rows.length)host.replaceChildren(ptext('p','当前没有工具授权请求。'));
+  else {
+    // Keep unchanged rows attached, including their typed reason and focus.
+    for(const row of [...host.children])if(!rows.includes(row))row.remove();
+    rows.forEach((row,index)=>{if(host.children[index]!==row)host.insertBefore(row,host.children[index] || null);});
+  }
+  host.querySelectorAll('button,input,textarea').forEach(el=>el.disabled=busy || !advanced);
+}
 function resetPlatformInitiative(item) {
   if(typeof WorkbenchDrafts!=='undefined')WorkbenchDrafts.detach(['runtime-subtasks','deployment']);
   platformState={itemId:item?.id || null,epoch:platformState.epoch+1,runtime:null,runtimeReadable:false,runtimePending:false,
@@ -81,24 +121,7 @@ function renderPlatformRuntime(data) {
   pe('iw-runtime-budget').textContent='Token '+(b.tokens_used ?? 0)+' / '+(b.token_budget ?? '未设定')+' · 时间 '+Math.round(b.elapsed_seconds || 0)+' / '+(b.time_budget_seconds ?? '未设定')+' 秒 · 并行上限 '+(b.max_workers ?? '未设定');
   for(const action of ['pause','resume','cancel']){const button=pe('iw-runtime-'+action);button.hidden=!data['can_'+action];button.disabled=busy;}
   pe('iw-runtime-evidence').textContent=JSON.stringify({candidate_sha256:data.candidate_sha256,evidence:data.evidence},null,2);
-  const approvals=pe('iw-runtime-approvals'),approvalSignature=JSON.stringify([data.initiative_id,data.run_id,data.approvals]);
-  if(approvals.dataset.signature!==approvalSignature) {
-  approvals.replaceChildren();approvals.dataset.signature=approvalSignature;
-  if(!(data.approvals || []).length)approvals.append(ptext('p','当前没有工具授权请求。'));
-  for(const approval of data.approvals || []) {
-    const row=document.createElement('article');row.append(ptext('h4',approval.tool_id+' · '+approval.status),
-      ptext('pre',JSON.stringify({id:approval.id,args:approval.args,args_sha256:approval.args_sha256,candidate_sha256:approval.candidate_sha256,actor:approval.actor,note:approval.note},null,2)));
-    if(approval.status==='pending') {
-      const note=platformInput('本次允许或拒绝的依据','','textarea');row.append(note.box);
-      for(const [decision,label] of [['allow','核对以上动作，允许一次'],['deny','拒绝本次动作']]) {
-        const button=ptext('button',label);button.type='button';button.disabled=busy;
-        button.onclick=()=>runtimeAction('approvals/'+encodeURIComponent(approval.id),{decision,note:note.input.value.trim()});row.append(button);
-      }
-    }
-    approvals.append(row);
-  }
-  }
-  approvals.querySelectorAll('button,input,textarea').forEach(el=>el.disabled=busy || !advanced);
+  renderRuntimeApprovals(data,busy,advanced);
   const tasks=pe('iw-runtime-subtasks');tasks.replaceChildren();
   if(!(data.subtasks || []).length)tasks.append(ptext('p','尚未启动子任务。先说明职责与文件范围，再核对并授权。'));
   for(const task of data.subtasks || []) {
@@ -118,6 +141,14 @@ function renderPlatformRuntime(data) {
 async function runtimeAction(action,fields={}) {
   if(!platformState.runtimeReadable || platformState.runtimePending || !initiativeWorkReadable)return;
   const epoch=platformState.epoch,id=platformState.itemId,data=platformState.runtime;
+  if(action==='control') {
+    fields={...fields};
+    for(const name of ['run_id','session_id','control_revision'])delete fields[name];
+    if(['pause','cancel'].includes(fields.action) && typeof data.run_id==='string' && data.run_id.trim() &&
+        typeof data.session_id==='string' && data.session_id.trim() && Number.isInteger(data.control_revision) && data.control_revision>=0) {
+      Object.assign(fields,{run_id:data.run_id,session_id:data.session_id,control_revision:data.control_revision});
+    }
+  }
   invalidateInitiativeReads();platformState.runtimePending=true;renderPlatformRuntime(data);
   try {
     const response=await platformPost('/api/v1/initiatives/'+encodeURIComponent(id)+'/runtime/'+action,
@@ -150,9 +181,10 @@ function trackRuntimeDraft(data) {
 }
 async function refreshPlatformProjectPlan(force=false) {
   const id=pe('home-project').value;pe('project-plan-panel').hidden=!id || id==='all';
-  if(!id || id==='all'){++projectPlanState.read;projectPlanState.id=null;return;}
+  if(!id || id==='all'){++projectPlanState.read;projectPlanState.id=null;projectPlanState.readable=false;syncProjectPlanEditor();return;}
   if(!force && projectPlanState.id===id && Date.now()-projectPlanState.at<15000)return;
   projectPlanState.id=id;projectPlanState.readable=false;pe('project-plan-edit').disabled=true;
+  syncProjectPlanEditor();
   pe('project-plan-architecture').textContent='';
   pe('project-plan-status').textContent='正在读取项目计划…';const read=++projectPlanState.read;
   try {
@@ -160,7 +192,19 @@ async function refreshPlatformProjectPlan(force=false) {
     if(read!==projectPlanState.read || id!==pe('home-project').value)return;
     if(data.project_id!==id || !Number.isInteger(data.revision) || !Array.isArray(data.milestones))throw new Error('项目计划身份无法核对');
     projectPlanState.data=data;projectPlanState.readable=true;projectPlanState.at=Date.now();renderProjectPlan(data);
-  }catch(error){if(read===projectPlanState.read){projectPlanState.data=null;pe('project-plan-status').textContent='计划不可读：'+error.message;pe('project-plan-objective').textContent='';pe('project-plan-milestones').replaceChildren();}}
+  }catch(error){if(read===projectPlanState.read){projectPlanState.data=null;pe('project-plan-status').textContent='计划不可读：'+error.message;pe('project-plan-objective').textContent='';pe('project-plan-milestones').replaceChildren();syncProjectPlanEditor();}}
+}
+function syncProjectPlanEditor() {
+  if(!projectPlanEditor)return;
+  const editor=projectPlanEditor,data=projectPlanState.data;
+  if(pe('home-project').value!==editor.project_id || projectPlanState.readable &&
+      (data?.project_id!==editor.project_id || data.revision!==editor.revision))editor.conflict=true;
+  if(editor.conflict) {
+    if(typeof WorkbenchDrafts!=='undefined')WorkbenchDrafts.flush();
+    pe('plan-error').textContent='项目或计划版本已变化。当前草稿仍属于 '+editor.project_id+' 的版本 '+editor.revision+'，已保留且可继续编辑。请核对最新计划，关闭后重新打开；旧草稿仅供比较。';
+  }
+  pe('plan-save').disabled=projectPlanState.pending || !projectPlanState.readable || editor.conflict ||
+    typeof workbenchWritesFrozen==='function' && workbenchWritesFrozen();
 }
 function renderProjectPlan(data) {
   pe('project-plan-edit').disabled=projectPlanState.pending;
@@ -174,6 +218,7 @@ function renderProjectPlan(data) {
     for(const id of m.initiative_ids || []){const button=ptext('button','打开事项 '+id);button.type='button';button.onclick=()=>openProjectInitiative(id);row.append(button);}
     const create=ptext('button','为此里程碑记录事项');create.type='button';create.onclick=()=>{workspaceView('decision');showInitiative(null);initiativeInput('project').value=data.project_id;initiativeInput('title').value=m.title;initiativeInput('raw').value='对应里程碑 '+m.id+'：'+m.title;initiativeInput('acceptance').value=Array.isArray(m.acceptance)?m.acceptance.join('\n'):m.acceptance || '';initiativeDirty=true;pe('initiative-status').textContent='保存新事项后，请在项目计划中关联该事项编号。';};row.append(create);list.append(row);
   }
+  syncProjectPlanEditor();
 }
 function planDraft() {
   return {objective:pe('plan-objective').value,architecture_refs:plines(pe('plan-architecture').value),milestones:[...pe('plan-rows').children].map(row=>Object.fromEntries([...row.querySelectorAll('[data-field]')].map(el=>[el.dataset.field,el.value])))};
@@ -188,22 +233,27 @@ function addMilestoneRow(values={}) {
   const remove=ptext('button','移除此里程碑');remove.type='button';remove.onclick=()=>{row.remove();pe('plan-rows').dispatchEvent(new Event('input',{bubbles:true}));};row.append(remove);pe('plan-rows').append(row);
 }
 function openProjectPlan() {
-  if(!projectPlanState.readable)return;const data=projectPlanState.data;
+  if(!projectPlanState.readable || projectPlanState.pending)return;const data=projectPlanState.data;
+  if(typeof WorkbenchDrafts!=='undefined')WorkbenchDrafts.detach(['project-plan']);
+  projectPlanEditor={project_id:data.project_id,revision:data.revision,conflict:false};
   pe('plan-error').textContent='';pe('plan-objective').value=data.objective || '';pe('plan-architecture').value=(data.architecture_refs || []).map(ref=>typeof ref==='string'?ref:ref.path).join('\n');pe('plan-rows').replaceChildren();
   for(const m of data.milestones || [])addMilestoneRow(m);
   pe('project-plan-dialog').showModal();
   if(typeof WorkbenchDrafts!=='undefined')WorkbenchDrafts.track('project-plan',{project:data.project_id,item:'plan',base:data.revision},planDraft,
     fields=>{pe('plan-objective').value=fields.objective || '';pe('plan-architecture').value=(fields.architecture_refs || []).join('\n');pe('plan-rows').replaceChildren();for(const m of fields.milestones || [])addMilestoneRow(m);},pe('project-plan-dialog'));
+  syncProjectPlanEditor();
 }
 async function saveProjectPlan() {
-  if(!projectPlanState.readable || projectPlanState.pending)return;const data=projectPlanState.data,fields=planDraft();
+  syncProjectPlanEditor();
+  if(!projectPlanEditor || !projectPlanState.readable || projectPlanState.pending || projectPlanEditor.conflict)return;
+  const editor=projectPlanEditor,fields=planDraft();
   fields.milestones=fields.milestones.map(m=>({...m,acceptance:m.acceptance.trim(),depends_on:plines(m.depends_on),initiative_ids:plines(m.initiative_ids)}));
   const snapshot=typeof WorkbenchDrafts!=='undefined' ? WorkbenchDrafts.capture('project-plan') : null;
   projectPlanState.pending=true;platformDisable('project-plan-dialog',true);
-  try{await platformPost('/api/v1/projects/'+encodeURIComponent(data.project_id)+'/plan',platformBody('plan/'+data.project_id,fields,data.revision));
-    if(snapshot)WorkbenchDrafts.clearSubmitted(snapshot);pe('project-plan-dialog').close();await refreshPlatformProjectPlan(true);await refreshProjectHome();
+  try{await platformPost('/api/v1/projects/'+encodeURIComponent(editor.project_id)+'/plan',platformBody('plan/'+editor.project_id,fields,editor.revision));
+    if(snapshot)WorkbenchDrafts.clearSubmitted(snapshot);projectPlanEditor=null;pe('project-plan-dialog').close();await refreshPlatformProjectPlan(true);await refreshProjectHome();
   }catch(error){pe('plan-error').textContent='保存结果待核对：'+error.message;projectPlanState.readable=false;await refreshPlatformProjectPlan(true);}
-  finally{projectPlanState.pending=false;platformDisable('project-plan-dialog',false);}
+  finally{projectPlanState.pending=false;platformDisable('project-plan-dialog',false);syncProjectPlanEditor();}
 }
 function renderPlatformWorkflow(data) {
   if(platformState.itemId!==data.id)return;
@@ -365,7 +415,7 @@ function initPlatform() {
   pe('iw-subtask-workers').onchange=()=>{platformState.subtaskDirty=true;pe('iw-subtask-start').hidden=true;pe('iw-subtask-editor').dispatchEvent(new Event('input',{bubbles:true}));};
   pe('iw-subtask-prepare').onclick=()=>{const max_workers=Number(pe('iw-subtask-workers').value);if(![2,3,4].includes(max_workers)){pe('iw-runtime-status').textContent='请选择 2、3 或 4 个并行 worker。';return;}return runtimeAction('subtasks/prepare',{subtasks:subtaskPayload(),max_workers});};
   pe('iw-subtask-start').onclick=()=>{if(!platformState.subtaskDirty)runtimeAction('subtasks/start',{plan_id:platformState.runtime?.subtask_plan_id});};
-  pe('project-plan-edit').onclick=openProjectPlan;pe('project-plan-close').onclick=()=>pe('project-plan-dialog').close();pe('plan-add').onclick=()=>{addMilestoneRow();pe('plan-rows').dispatchEvent(new Event('input',{bubbles:true}));};pe('plan-save').onclick=saveProjectPlan;
+  pe('project-plan-edit').onclick=openProjectPlan;pe('project-plan-close').onclick=()=>{if(typeof WorkbenchDrafts!=='undefined')WorkbenchDrafts.detach(['project-plan']);projectPlanEditor=null;pe('project-plan-dialog').close();};pe('plan-add').onclick=()=>{addMilestoneRow();pe('plan-rows').dispatchEvent(new Event('input',{bubbles:true}));};pe('plan-save').onclick=saveProjectPlan;
   pe('preview-plan-close').onclick=()=>{++candidatePreviewSerial;platformState.preview=null;pe('preview-plan-dialog').close();};pe('preview-plan-start').onclick=startPlatformPreview;
   pe('iw-deployment-prepare').onclick=()=>deploymentAction('prepare',{profile_id:pe('iw-deployment-profile').value});
   pe('iw-deployment-profile').onchange=()=>{platformState.deployment=null;pe('iw-deployment-start').hidden=true;};

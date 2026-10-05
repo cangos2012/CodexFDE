@@ -101,15 +101,15 @@ def submit_daily(repository, runtime, tasks, plan, on_task_created, *, runner_fa
         target.write_bytes(content)
     if manifest(repository, runtime) != plan['source_manifest']:
         raise ValueError('复制期间源码变化，请重新准备方案')
-    _git(workspace, 'init', '--quiet')
+    _git(workspace, 'init', '--quiet', runtime=runtime)
     # The snapshot already uses an explicit source allowlist. Preserve ignored
     # local contracts too; otherwise later patches mistake them for new files.
-    _git(workspace, 'add', '--force', '--all')
+    _git(workspace, 'add', '--force', '--all', runtime=runtime)
     _git(workspace, '-c', 'user.name=Workbench snapshot', '-c', 'user.email=workbench@localhost',
-         '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'Daily development source snapshot')
+         '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'Daily development source snapshot', runtime=runtime)
     tasks.append_event(task['id'], '已创建日常研发隔离副本', actor=plan['actor'], evidence={
         'path': str(workspace), 'source_sha256': plan['source_sha256'],
-        'baseline_commit': _git(workspace, 'rev-parse', 'HEAD')})
+        'baseline_commit': _git(workspace, 'rev-parse', 'HEAD', runtime=runtime)})
     cases = tuple(plan['eval_cases'])
     before = eval_factory(workspace, runtime, task['id'], cases, 'daily-before')()
     tasks.append_event(task['id'], '日常研发执行前检查', actor=plan['actor'], evidence=before)
@@ -175,15 +175,11 @@ def submit_daily(repository, runtime, tasks, plan, on_task_created, *, runner_fa
             'recovery': 'retain_candidate_new_plan' if result['status'] != 'review' else None})
         learning.finish(task['id'])
     # Include new files in the patch without committing or touching the source index.
-    for scope in plan['write_scope']:
-        if (workspace / scope).exists() or _git(workspace, 'ls-files', '--', scope):
-            _git(workspace, 'add', '--force', '--intent-to-add', '--all', '--', scope)
     patch_path = folder / 'changes.patch'
-    import subprocess
-    diff = subprocess.run(['git', 'diff', '--binary', 'HEAD'], cwd=workspace, capture_output=True, check=True)
-    patch_path.write_bytes(diff.stdout)
+    from .delivery_runtime import DeliveryRuntime
+    patch_path.write_bytes(DeliveryRuntime._patch(workspace, plan['write_scope']))
     tasks.append_event(task['id'], '日常研发交付包已保存', actor=plan['actor'], evidence={
         'workspace': str(workspace), 'patch_path': str(patch_path),
-        'patch_sha256': hashlib.sha256(diff.stdout).hexdigest(), 'source_sha256': plan['source_sha256'],
+        'patch_sha256': hashlib.sha256(read_bytes(patch_path)).hexdigest(), 'source_sha256': plan['source_sha256'],
         'status': result['status'], 'merged': False})
     return {'task': tasks.get(task['id'])}

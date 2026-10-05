@@ -174,7 +174,9 @@ class HarnessPlatformAPI:
         if not action:
             raise ValueError('Session状态必须是active、paused或closed')
         view = self.delivery_runtime.control(binding['initiative_id'], action, actor,
-                    data.get('expected_revision'), data.get('candidate_sha256', ''))
+                    data.get('expected_revision'), data.get('candidate_sha256', ''),
+                    run_id=data.get('run_id'), session_id=data.get('session_id'),
+                    control_revision=data.get('control_revision'))
         return {**self.runtime.get_session(session_id), 'runtime': view}
 
     def _shared_tool(self, session_id, task_id, tool_id, context, data, actor, call_id):

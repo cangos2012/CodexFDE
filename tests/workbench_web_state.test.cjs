@@ -242,6 +242,8 @@ test('uncertain submission retries the same key and closes after acceptance even
   context.document.getElementById('task-lesson').value = '13';
   context.document.getElementById('task-actor').value = 'maintainer';
   context.document.getElementById('task-request').value = '检查补货';
+  context.document.getElementById('verification-project').value = '';
+  vm.runInContext("courseVerificationState={lesson:'13',projectId:'',context:{ready:true,checks:[{name:'purchase_requires_approval'}],verification_key:'reviewed-target'}};", context);
   const first = context.submitTask({preventDefault() {}});
   const key = pending[0].options.headers['Idempotency-Key'];
   assert.ok(key);

@@ -61,7 +61,11 @@ class AgentRosterTests(unittest.TestCase):
             repo.mkdir()
             subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
             api = HarnessPlatformAPI(root / "harness", repo)
-            report = {"summary": {"decision": "pass", "blocking_failed": 0, "blocking_passed": 1}, "results": []}
+            report = {"summary": {"total": 1, "passed": 1, "decision": "pass",
+                                  "blocking_failed": 0, "observing_failed": 0},
+                      "results": [{"name": "synthetic-command-fixture", "level": "blocking",
+                                   "passed": True,
+                                   "evidence": "Synthetic local fixture; no business or human acceptance."}]}
             script = (
                 "import pathlib,sys;pathlib.Path(sys.argv[1]).write_text("
                 + repr(json.dumps(report))

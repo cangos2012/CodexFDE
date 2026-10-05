@@ -63,7 +63,8 @@ def post(app, path, body, headers, address):
                (len(parts) >= 6 and parts[:3] == ['api', 'v1', 'initiatives'] and parts[4] in {'runtime', 'deployments'}))
     if not handled:
         return None
-    if address not in {'127.0.0.1', '::1'} or (headers.get('Origin') and headers['Origin'] != 'http://' + headers.get('Host', '')):
+    # The HTTP entry point has already validated Host and Origin for every route.
+    if address not in {'127.0.0.1', '::1'}:
         return 403, {'error': 'cross_origin', 'message': '请从本机工作台操作'}
     actor = app.initiative_workflow.actor(body.get('actor'))
     if path.startswith('/api/v1/harness/'):
@@ -97,7 +98,11 @@ def post(app, path, body, headers, address):
     if area == 'runtime':
         service = app.delivery_runtime
         if action == 'control':
-            return mutate(lambda: service.control(item_id, body.get('action'), actor, revision, body.get('candidate_sha256', '')))
+            return mutate(lambda: service.control(item_id, body.get('action'), actor, revision,
+                                                  body.get('candidate_sha256', ''),
+                                                  run_id=body.get('run_id'),
+                                                  session_id=body.get('session_id'),
+                                                  control_revision=body.get('control_revision')))
         if not app.advanced_enabled:
             return 503, {'error': 'advanced_disabled', 'message': '请用--enable-advanced-runtime启用分工与工具授权'}
         if action == 'profile':

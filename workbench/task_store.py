@@ -97,11 +97,11 @@ class TaskStore:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
 
     @contextmanager
-    def connect(self, *, create=False) -> Iterator[sqlite3.Connection]:
+    def connect(self, *, create=False, timeout=5) -> Iterator[sqlite3.Connection]:
         from .maintenance import runtime_write_guard
         with runtime_write_guard(self.path):
-            conn = sqlite3.connect(self.path) if create else sqlite3.connect(
-                Path(self.path).resolve().as_uri() + '?mode=rw', uri=True)
+            conn = sqlite3.connect(self.path, timeout=timeout) if create else sqlite3.connect(
+                Path(self.path).resolve().as_uri() + '?mode=rw', uri=True, timeout=timeout)
             conn.row_factory = sqlite3.Row
             try:
                 yield conn
@@ -126,6 +126,7 @@ class TaskStore:
         execution_timeout_seconds: int = 900,
         submission_key: str | None = None,
         frozen_contract: dict | None = None,
+        verification_target: dict | None = None,
     ) -> dict:
         if not request.strip():
             raise ValueError("任务需求不能为空")
@@ -146,11 +147,14 @@ class TaskStore:
         task_id = task_id or f"TASK-{uuid.uuid4().hex[:10].upper()}"
         if not re.fullmatch(r"TASK-[A-Z0-9]{10}", task_id):
             raise ValueError("任务编号格式无效")
-        fingerprint = hashlib.sha256(json.dumps({
+        submission = {
             "request": request.strip(), "requirement": requirement_id.strip(), "refs": refs,
             "actor": actor.strip(), "mode": execution_mode, "scope": scopes,
             "timeout": int(execution_timeout_seconds), "automation": automation_mode,
-        }, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+        }
+        if verification_target is not None:
+            submission['verification_target'] = verification_target
+        fingerprint = hashlib.sha256(json.dumps(submission, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
         with self.connect() as conn:
             if submission_key is not None:
                 if not submission_key.strip() or len(submission_key) > 200:
@@ -181,6 +185,7 @@ class TaskStore:
                     "requirement_id": requirement_id.strip(), "business_refs": refs, "spec_path": spec_path.strip(),
                     "automation_mode": automation_mode, "execution_mode": execution_mode,
                     "write_scope": scopes, "execution_timeout_seconds": int(execution_timeout_seconds),
+                    **({'verification_target': verification_target} if verification_target is not None else {}),
                 }, ensure_ascii=False)),
             )
             if submission_key is not None:

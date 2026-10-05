@@ -62,8 +62,16 @@ class WindowsJob:
 
 def spawn(command, cwd, *, env=None):
     """Return (process, owner, stdin prefix). No command runs before assignment."""
-    owner = WindowsJob() if os.name == 'nt' else None
-    actual = [sys.executable, '-X', 'utf8', '-u', str(Path(__file__).resolve())] if owner else command
+    if os.name == 'nt':
+        base = getattr(sys, '_base_executable', None)
+        if not isinstance(base, str) or not base or not Path(base).is_file():
+            raise OSError('Windows 受管进程缺少可用的基础 Python 解释器，拒绝启动')
+        # A venv launcher can create the guard before assignment, and its private
+        # Job permits descendants to break away. Launch this stdlib guard directly.
+        owner = WindowsJob()
+        actual = [base, '-X', 'utf8', '-u', str(Path(__file__).resolve())]
+    else:
+        owner, actual = None, command
     try:
         process = subprocess.Popen(actual, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace',

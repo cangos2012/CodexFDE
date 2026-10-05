@@ -310,7 +310,10 @@ class InitiativeWorkflowTests(unittest.TestCase):
             'non_goals': [], 'acceptance': [], 'write_scope': [], 'steps': [],
             'sources': ['workbench/value.py', example, prompt]}
         calls = []
-        def run(runner, command, prompt, timeout, on_line, started):
+        actual_streaming = CodexExecutionRunner._run_codex_streaming
+        def run(runner, command, prompt, timeout, on_line, started, **kwargs):
+            if command[:2] != [runner.executable, 'exec']:
+                return actual_streaming(runner, command, prompt, timeout, on_line, started, **kwargs)
             calls.append(command)
             Path(command[command.index('--output-last-message') + 1]).write_text(json.dumps(proposal), encoding='utf-8')
             on_line('{"type":"thread.started"}')

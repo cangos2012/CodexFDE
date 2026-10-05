@@ -125,8 +125,9 @@ class WorkbenchReliabilityTests(unittest.TestCase):
     def test_incomplete_body_has_total_deadline_and_creates_no_records(self):
         client = socket.create_connection(self.server.server_address, timeout=3)
         self.addCleanup(client.close)
-        client.sendall(b'POST /api/v1/initiatives HTTP/1.0\r\nContent-Type: application/json\r\n'
-                       b'Content-Length: 64\r\n\r\n{')
+        client.sendall(b'POST /api/v1/initiatives HTTP/1.0\r\n'
+                       + f'Host: 127.0.0.1:{self.server.server_port}\r\n'.encode()
+                       + b'Content-Type: application/json\r\nContent-Length: 64\r\n\r\n{')
         started = time.monotonic()
         response = client.makefile('rb').read()
         self.assertIn(b'408 Request Timeout', response)
@@ -140,8 +141,9 @@ class WorkbenchReliabilityTests(unittest.TestCase):
                         b'Content-Length: 2\r\nTransfer-Encoding: chunked'):
             with socket.create_connection(self.server.server_address, timeout=3) as client:
                 with patch('workbench.platform_http.post') as action:
-                    client.sendall(b'POST /api/v1/unknown HTTP/1.0\r\nContent-Type: application/json\r\n'
-                                   + framing + b'\r\n\r\n{}')
+                    client.sendall(b'POST /api/v1/unknown HTTP/1.0\r\n'
+                                   + f'Host: 127.0.0.1:{self.server.server_port}\r\n'.encode()
+                                   + b'Content-Type: application/json\r\n' + framing + b'\r\n\r\n{}')
                     response = client.makefile('rb').read()
                     self.assertIn(b'400 Bad Request', response)
                     action.assert_not_called()
@@ -197,8 +199,9 @@ class WorkbenchReliabilityTests(unittest.TestCase):
                         except OSError:
                             return
                 with patch.object(handler_class, '_json', json_with_unread_input), patch('workbench.platform_http.post') as action:
-                    client.sendall(b'POST /api/v1/unknown HTTP/1.0\r\nContent-Type: application/json\r\n'
-                                   b'Content-Length: 100\r\n\r\n{')
+                    client.sendall(b'POST /api/v1/unknown HTTP/1.0\r\n'
+                                   + f'Host: 127.0.0.1:{self.server.server_port}\r\n'.encode()
+                                   + b'Content-Type: application/json\r\nContent-Length: 100\r\n\r\n{')
                     sender = threading.Thread(target=drip, daemon=True)
                     sender.start()
                     try:

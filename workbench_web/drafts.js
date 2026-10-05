@@ -74,12 +74,16 @@ var WorkbenchDrafts = (() => {
     for (const entry of versions) {
       const {saved} = entry, matches = saved.base === binding.base;
       const section = document.createElement('div'), text = document.createElement('p');
-      text.textContent = matches ? '有未提交的本机草稿。恢复仅填入可编辑字段。' :
+      text.textContent = binding.group==='review' ? (matches ?
+        '有当前候选与 Eval 的本机验收草稿。恢复仅填写意见，仍需重新核对并主动验收。' :
+        '有旧候选或 Eval 的验收草稿，仅供查看比较；请核对当前证据并填写本轮意见。') :
+        matches ? '有未提交的本机草稿。恢复仅填入可编辑字段。' :
         '有旧版本草稿。最新合同保持不变，可展开旧内容后手动复制。';
       section.append(text);
       if (matches) {
         const restore = document.createElement('button'); restore.type = 'button'; restore.textContent = '恢复草稿';
         restore.onclick = () => {
+          if(bindings.get(binding.group)!==binding || saved.base!==binding.base)return;
           binding.set(saved.fields); binding.submissionKey = saved.submission_key || '';
           binding.last = JSON.stringify(binding.get()); section.replaceChildren();
         };
@@ -204,7 +208,7 @@ function trackWorkflowDrafts(data) {
     () => ({message: iw('message').value, answers: Object.fromEntries([...iw('answers').querySelectorAll('textarea')].map(e => [e.dataset.question, e.value]))}),
     fields => { if (!iw('message').disabled) iw('message').value = fields.message || '';
       for (const e of iw('answers').querySelectorAll('textarea')) if (!e.disabled) e.value = fields.answers?.[e.dataset.question] || ''; }, iw('pane-action'));
-  track('review', data.active_task_id, ['iw-note'], 'iw-result');
+  track('review', initiativeReviewBase(data), ['iw-note'], 'iw-result');
   track('v0', data.initiative_version, ['v0-spec','v0-workspace','v0-files'], 'v0-entry');
   const candidateIds = ['task','feedback','supersedes','title','content','applies','excludes','boundary','conflict','parameters','paths','contains','precheck','implement','eval','review','outputs','stop','rollback','guidance','generation-id','evidence-refs','schema','check-preconditions','check-precheck','check-implement','check-eval','required-implement','required-eval'].map(k => 'iw-learning-' + k);
   WorkbenchDrafts.track('learning-candidate', {...context, base: data.active_task_id},

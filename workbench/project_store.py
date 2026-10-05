@@ -54,10 +54,18 @@ class ProjectStore:
         finally:
             conn.close()
 
+    def validate_root_source(self, root_path: str | Path) -> Path:
+        root = Path(root_path).resolve()
+        runtime = self.path.parent.resolve()
+        # Source may contain the data directory, but data must not contain source.
+        if root.is_relative_to(runtime):
+            raise ValueError("项目源码不得位于工作台数据目录内，请选择独立源码目录")
+        return root
+
     def create(self, name: str, root_path: str | Path,
                eval_command: list[str], project_id: str = "", *, allow_pending_eval=False) -> dict:
         label = name.strip()
-        root = Path(root_path).resolve()
+        root = self.validate_root_source(root_path)
         command = [str(part).strip() for part in eval_command if str(part).strip()]
         if not label:
             raise ValueError("项目名称不能为空")

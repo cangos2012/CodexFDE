@@ -23,7 +23,7 @@ RESTORE_MARKER = 'workbench-restored.json'
 EVIDENCE_DIRS = frozenset({'reports', 'project-reports', 'delivery', 'daily-delivery', 'course',
     'course-worktrees', 'specs', 'v0-contracts', 'initiative-research', 'initiative-integration',
     'ci-evidence', 'hook-packages', 'candidates', 'release-index', 'baseline-audits', 'subagents',
-    'learning-generation', 'deployments', 'migration', 'runtime-events', 'harness-sessions', 'sessions_jsonl'})
+    'learning-generation', 'deployments', 'migration', 'runtime-events', 'harness-sessions', 'sessions_jsonl', 'git-processes'})
 SKIP_DIRS = frozenset({'.venv', 'node_modules', '__pycache__', '.cache', '.runtime', '.harness-runtime'})
 MAX_BYTES = 8 * 1024 ** 3
 MAX_FILES = 100000

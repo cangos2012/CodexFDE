@@ -54,7 +54,15 @@ class EvalHarnessTests(unittest.TestCase):
             self.assertEqual('stale', report_view(second, root, runtime)['freshness'])
             with self.assertRaisesRegex(RuntimeError, '候选源码变化'):
                 runner()
-            self.assertEqual(3, len(list(runtime.rglob('process.json'))))
+            self.assertEqual(3, len(list((runtime / 'project-reports').rglob('process.json'))))
+            git_receipts = list((runtime / 'git-processes').rglob('process.json'))
+            self.assertTrue(git_receipts, 'source enumeration must retain real Git receipts')
+            for path in git_receipts:
+                receipt = json.loads(path.read_text(encoding='utf-8'))
+                self.assertEqual(['git', 'ls-files', '-z', '--cached', '--others', '--exclude-standard'],
+                                 receipt['command'])
+                self.assertEqual(0, receipt['returncode'])
+                self.assertTrue(receipt['success'])
 
 
 if __name__ == '__main__':

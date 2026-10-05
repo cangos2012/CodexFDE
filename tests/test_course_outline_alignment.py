@@ -90,6 +90,40 @@ def markdown_anchors(body: str) -> set[str]:
     return anchors
 
 
+def course_governance_issues(*, outline: str, blueprint: str, agents: str, student_nav: str) -> list[str]:
+    """Check the existing teaching contract rather than retired application files."""
+    issues: list[str] = []
+    for name in ("国家级一流本科课程建设方案", "国家级一流本科课程申报级质量门"):
+        if name in student_nav:
+            issues.append("已退役治理文档进入学生导航")
+        if name in agents:
+            issues.append("AGENTS 仍要求已退役治理文档")
+    for reference in (f"docs/{OUTLINE.name}", "docs/courses/课程蓝图.md"):
+        if reference not in agents:
+            issues.append(f"AGENTS 缺少现存课程依据：{reference}")
+    if set(re.findall(r"^\| CLO-(\d) \|", outline, re.MULTILINE)) != set("123456"):
+        issues.append("大纲缺少完整 CLO-1～6 学习成果")
+    if set(re.findall(r"^\| CLO-(\d)：", blueprint, re.MULTILINE)) != set("123456"):
+        issues.append("蓝图缺少完整 CLO-1～6 活动与直接证据")
+    requirements = (
+        (outline, r"学生证据[^\n]*首次判断[^\n]*失败[^\n]*修订[^\n]*独立迁移[^\n]*答辩[^\n]*学生本人而非参考仓库或模型自述", "学生本人原始学习证据"),
+        (outline, r"课程目标与专业毕业要求的正式对应关系由开课学校审批，不由仓库代填", "学校审批边界"),
+        (outline, r"^\| CLO-5 \|[^\n]*具名人工审核", "大纲具名人工审核"),
+        (blueprint, r"^\| CLO-5：[^\n]*具名审核与打回[^\n]*具名决定", "蓝图具名审核与直接证据"),
+        (blueprint, r"最终绿灯证明本次检查通过，学生能设计新反例并解释结果，才支持学习达成判断", "绿灯与学习达成边界"),
+        (blueprint, r"缺少真实运行或人审，就保留待办并安排补做", "缺少真实验收仍须待办"),
+        (blueprint, r"虚构人物决定不能充当学生完成记录", "教学示意不能充当学生完成记录"),
+        (blueprint, r"每次修订保留问题来源、材料版本、采取的改法和复查结果，以真实学习记录判断改进是否有效", "真实记录驱动持续改进"),
+        (blueprint, r"真实课堂实施、学生学习记录和改进效果仍须采集", "真实教学实施待采集边界"),
+        (blueprint, r"涉及正式申报时另核对当时官方要求与校方材料，不用仓库测试替代真实教学证据", "正式申报与教学证据边界"),
+        (agents, r"不得用模拟数据或仓库测试替代真实教学证据", "AGENTS 教学诚信边界"),
+    )
+    for body, pattern, label in requirements:
+        if not re.search(pattern, body, re.MULTILINE):
+            issues.append(label)
+    return issues
+
+
 class CourseOutlineAlignmentTests(unittest.TestCase):
     def test_discovery_excludes_teacher_notes_and_rejects_duplicate_student_files(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -337,22 +371,54 @@ class CourseOutlineAlignmentTests(unittest.TestCase):
         self.assertIn("具名人审", l16)
 
     def test_student_navigation_excludes_internal_governance_documents(self) -> None:
-        student_nav = (DOCS / "README.md").read_text(encoding="utf-8")
+        issues = course_governance_issues(**self._governance_documents())
+        self.assertFalse(issues, "\n".join(issues))
+
+    @staticmethod
+    def _governance_documents() -> dict[str, str]:
+        return {
+            "outline": OUTLINE.read_text(encoding="utf-8"),
+            "blueprint": (COURSES / "课程蓝图.md").read_text(encoding="utf-8"),
+            "agents": (ROOT / "AGENTS.md").read_text(encoding="utf-8"),
+            "student_nav": (DOCS / "README.md").read_text(encoding="utf-8"),
+        }
+
+    def test_governance_rejects_missing_or_self_certified_learning_evidence(self) -> None:
+        documents = self._governance_documents()
+        changes = (
+            ("outline", "| CLO-6 |", "| 扩展目标 |", "大纲缺少完整 CLO-1～6 学习成果"),
+            ("blueprint", "| CLO-3：", "| 参考演示：", "蓝图缺少完整 CLO-1～6 活动与直接证据"),
+            ("outline", "学生本人而非参考仓库或模型自述", "参考仓库或模型自述即可证明", "学生本人原始学习证据"),
+            ("outline", "具名人工审核", "AI 自行签收", "大纲具名人工审核"),
+            ("blueprint", "具名审核与打回", "自动通过", "蓝图具名审核与直接证据"),
+            ("blueprint", "学生能设计新反例并解释结果，才支持学习达成判断", "测试通过即可认定学生学习达成", "绿灯与学习达成边界"),
+            ("blueprint", "缺少真实运行或人审，就保留待办并安排补做", "缺少真实运行或人审也记为完成", "缺少真实验收仍须待办"),
+            ("blueprint", "虚构人物决定不能充当学生完成记录", "虚构人物决定可以充当学生完成记录", "教学示意不能充当学生完成记录"),
+            ("blueprint", "以真实学习记录判断改进是否有效", "以参考测试绿灯认定改进有效", "真实记录驱动持续改进"),
+            ("blueprint", "真实课堂实施、学生学习记录和改进效果仍须采集", "模板齐备即证明真实教学有效", "真实教学实施待采集边界"),
+            ("blueprint", "不用仓库测试替代真实教学证据", "仓库测试可代替真实教学证据", "正式申报与教学证据边界"),
+            ("outline", "由开课学校审批，不由仓库代填", "由仓库直接确认", "学校审批边界"),
+            ("agents", "不得用模拟数据或仓库测试替代真实教学证据", "允许用模拟数据替代真实教学证据", "AGENTS 教学诚信边界"),
+        )
+        for key, original, replacement, expected in changes:
+            with self.subTest(document=key, missing=expected):
+                self.assertIn(original, documents[key])
+                changed = dict(documents)
+                changed[key] = changed[key].replace(original, replacement)
+                self.assertIn(expected, course_governance_issues(**changed))
+
+    def test_governance_rejects_retired_navigation_and_missing_current_authority(self) -> None:
+        documents = self._governance_documents()
         for name in ("国家级一流本科课程建设方案", "国家级一流本科课程申报级质量门"):
-            self.assertNotIn(name, student_nav)
-        for required in ("国家级一流本科课程建设方案.md", "国家级一流本科课程申报级质量门.md"):
-            document = COURSES / required
-            self.assertTrue(document.is_file())
-            body = document.read_text(encoding="utf-8")
-            self.assertIn("待校方确认", body)
-            self.assertIn("待真实教学采集", body)
-            self.assertRegex(body, r"不代表申报资格[^。\n]*课程认定")
-        plan = (COURSES / "国家级一流本科课程建设方案.md").read_text(encoding="utf-8")
-        for number in range(1, 7):
-            self.assertIn(f"CLO-{number}", plan)
-        self.assertIn("持续改进", plan)
-        blueprint = (COURSES / "课程蓝图.md").read_text(encoding="utf-8")
-        self.assertNotIn("当前仓库尚缺此文件", blueprint)
+            with self.subTest(retired=name):
+                changed = dict(documents)
+                changed["student_nav"] += f"\n[内部材料](courses/{name}.md)\n"
+                self.assertIn("已退役治理文档进入学生导航", course_governance_issues(**changed))
+        for reference in (f"docs/{OUTLINE.name}", "docs/courses/课程蓝图.md"):
+            with self.subTest(authority=reference):
+                changed = dict(documents)
+                changed["agents"] = changed["agents"].replace(reference, "已删除文件.md")
+                self.assertIn(f"AGENTS 缺少现存课程依据：{reference}", course_governance_issues(**changed))
 
     def test_workspace_points_back_to_repository_root(self) -> None:
         workspace = (COURSES / "FlowERP-AI研发工作台.code-workspace").read_text(encoding="utf-8")

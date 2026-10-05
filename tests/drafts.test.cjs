@@ -24,6 +24,12 @@ test('changed version exposes old content without overwriting current contract',
   assert.equal(b.fields().message,'');assert.equal(b.ui.node('draft-discussion').querySelectorAll('button').some(e=>e.textContent==='恢复草稿'),false);
   assert.match(b.ui.node('draft-discussion').querySelectorAll('p')[0].textContent,/旧版本/);
 });
+
+test('a stale restore callback cannot fill a newer draft binding',()=>{
+  const a=setup();a.track(1);a.type('old evidence');const b=setup(a.store);b.track(1);
+  const oldRestore=b.ui.node('draft-discussion').querySelectorAll('button').find(e=>e.textContent==='恢复草稿');
+  b.track(2);oldRestore.onclick();assert.equal(b.fields().message,'');
+});
 test('uncertain submission keeps stable key across reload and success clears it',()=>{
   const a=setup();a.track();a.type('new item');const key=a.drafts.submissionKey('discussion');
   const b=setup(a.store);b.track();assert.equal(b.drafts.submissionKey('discussion'),key);
