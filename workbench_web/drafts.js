@@ -206,11 +206,11 @@ function trackWorkflowDrafts(data) {
       for (const e of iw('answers').querySelectorAll('textarea')) if (!e.disabled) e.value = fields.answers?.[e.dataset.question] || ''; }, iw('pane-action'));
   track('review', data.active_task_id, ['iw-note'], 'iw-result');
   track('v0', data.initiative_version, ['v0-spec','v0-workspace','v0-files'], 'v0-entry');
-  const candidateIds = ['task','feedback','supersedes','title','content','applies','excludes','boundary','conflict','parameters','paths','contains','precheck','implement','eval','review','outputs','stop','rollback'].map(k => 'iw-learning-' + k);
+  const candidateIds = ['task','feedback','supersedes','title','content','applies','excludes','boundary','conflict','parameters','paths','contains','precheck','implement','eval','review','outputs','stop','rollback','guidance','generation-id','evidence-refs','schema','check-preconditions','check-precheck','check-implement','check-eval','required-implement','required-eval'].map(k => 'iw-learning-' + k);
   WorkbenchDrafts.track('learning-candidate', {...context, base: data.active_task_id},
     () => ({...draftFields(candidateIds), 'iw-learning-kind': iw('learning-kind').value}),
     fields => { restoreDraftFields({'iw-learning-task':fields['iw-learning-task'] || ''});
-      iw('learning-task').onchange?.();restoreDraftFields(fields); iw('learning-kind').onchange(); }, iw('learning-candidate'));
+      iw('learning-task').onchange?.();restoreDraftFields(fields); iw('learning-kind').onchange();iw('learning-schema').onchange?.(); }, iw('learning-candidate'));
   WorkbenchDrafts.track('learning-decisions', {...context, base: data.learning_recall?.id || ''},
     () => Object.fromEntries([...iw('learning-matches').querySelectorAll('article[data-asset-id]')].map(card => [card.dataset.assetId,
       {adopt:card.querySelector('[data-choice="adopt"]').value, reason:card.querySelector('[data-choice="reason"]').value,

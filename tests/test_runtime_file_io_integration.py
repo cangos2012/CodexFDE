@@ -8,11 +8,15 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
 from workbench import ci_evidence, file_io, quality_hook, workbench_backup
 from workbench.task_store import TaskStore
+from workbench.reference_paths import reference_mapping_scope
+
+REAL_SLEEP = time.sleep
 
 
 @contextmanager
@@ -32,7 +36,7 @@ def transient_read_lock(path, replacement=None):
         return original(target, *args, **kwargs)
 
     with patch.object(file_io, '_WINDOWS', True), patch.object(Path, 'open', opened), \
-            patch.object(file_io.time, 'sleep'):
+            patch.object(file_io.time, 'sleep', wraps=REAL_SLEEP):
         yield attempts
 
 
@@ -41,6 +45,65 @@ class RuntimeReadIntegrationTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix='runtime-read-integration-')
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
+
+    def v0_contract(self):
+        spec = self.root / 'SPEC.md'
+        text = '\n\n'.join('## ' + title + '\n' + content for title, content in (
+            ('来源', '隔离故障测试'), ('目标', '检查当前合同'), ('非目标', '不改客户'),
+            ('约束', '只复验'), ('验收用例', '读取成功'), ('完成定义', '仍待真人审核')))
+        spec.write_text(text, encoding='utf-8')
+        store = TaskStore(self.root / 'runtime' / 'workbench.db')
+        return store, spec, text
+
+    def submit_v0(self, store, spec):
+        return store.create_v0('隔离 Spec 读取故障', spec_path=str(spec), actor='fixture',
+                               workspace_path=str(self.root), execution_timeout_seconds=30)
+
+    def test_v0_freezes_current_spec_after_temporary_read_lock(self):
+        store, spec, text = self.v0_contract()
+        changed = text.replace('检查当前合同', '检查重读后的合同')
+        with transient_read_lock(spec, changed.encode('utf-8')) as attempts:
+            task = self.submit_v0(store, spec)
+        self.assertEqual(2, len(attempts))
+        self.assertEqual(changed, task['spec_text'])
+        self.assertEqual(hashlib.sha256(changed.encode('utf-8')).hexdigest(), task['spec_sha256'])
+        self.assertEqual('检查重读后的合同', task['spec']['goal'])
+
+    def test_v0_rejects_invalid_spec_after_read_lock_without_creating_task(self):
+        store, spec, _ = self.v0_contract()
+        with transient_read_lock(spec, b'changed invalid contract') as attempts:
+            with self.assertRaisesRegex(ValueError, 'Spec 缺少'):
+                self.submit_v0(store, spec)
+        self.assertEqual(2, len(attempts))
+        self.assertEqual([], store.list())
+
+    def test_v0_persistent_read_denial_is_bounded_and_creates_no_task(self):
+        store, spec, _ = self.v0_contract()
+        original, attempts = Path.open, []
+
+        def denied(target, mode='r', *args, **kwargs):
+            if target == spec and mode in {'r', 'rt', 'rb'}:
+                attempts.append(mode)
+                error = PermissionError(errno.EACCES, 'persistent Spec sharing denial')
+                error.winerror = 32
+                raise error
+            return original(target, mode, *args, **kwargs)
+
+        with patch.object(file_io, '_WINDOWS', True), patch.object(Path, 'open', denied), \
+                patch.object(file_io.time, 'sleep', wraps=REAL_SLEEP):
+            with self.assertRaisesRegex(ValueError, 'Spec 无法读取'):
+                self.submit_v0(store, spec)
+        self.assertEqual(6, len(attempts))
+        self.assertEqual([], store.list())
+
+    def test_v0_explicit_spec_is_not_redirected_by_another_runtime_map(self):
+        store, spec, text = self.v0_contract()
+        other = self.root / 'OTHER.md'
+        other.write_text(text.replace('检查当前合同', '无关迁移合同'), encoding='utf-8')
+        with reference_mapping_scope(self.root / 'other-runtime', {str(spec): str(other)}):
+            task = self.submit_v0(store, spec)
+        self.assertEqual(text, task['spec_text'])
+        self.assertEqual(hashlib.sha256(text.encode('utf-8')).hexdigest(), task['spec_sha256'])
 
     def stock_module(self):
         source = Path(__file__).resolve().parents[1] / 'docs/courses/L06/examples/stock_practice.py'
@@ -71,7 +134,7 @@ class RuntimeReadIntegrationTests(unittest.TestCase):
 
         arguments = ['ci-evidence', '--report', str(report), '--output', str(output)]
         with patch.object(file_io, '_WINDOWS', True), patch.object(Path, 'open', denied), \
-                patch.object(file_io.time, 'sleep'), patch.object(sys, 'argv', arguments), \
+                patch.object(file_io.time, 'sleep', wraps=REAL_SLEEP), patch.object(sys, 'argv', arguments), \
                 patch.dict(os.environ, {'GITHUB_SHA': 'abc', 'GITHUB_RUN_ID': '1'}):
             with self.assertRaises(PermissionError):
                 ci_evidence.main()
@@ -112,7 +175,7 @@ class RuntimeReadIntegrationTests(unittest.TestCase):
                     return original(target, *args, **kwargs)
 
                 with patch.object(file_io, '_WINDOWS', True), patch.object(Path, 'open', changed), \
-                        patch.object(file_io.time, 'sleep'):
+                        patch.object(file_io.time, 'sleep', wraps=REAL_SLEEP):
                     with self.assertRaisesRegex(ValueError, '准备期间'):
                         quality_hook.prepare(self.root / filename / 'runtime', candidate, project,
                                              'TASK-fixture', 'INIT-fixture', 'fixture-preparer')

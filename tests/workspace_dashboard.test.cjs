@@ -9,6 +9,7 @@ function setup() {
   function element(tag) {
     return {tag, hidden:false, disabled:false, value:'', textContent:'', dataset:{}, children:[],
       classList:{toggle() {}}, setAttribute() {}, removeAttribute() {},
+      showModal() {this.hidden=false;}, close() {this.hidden=true;},
       append(...children) {this.children.push(...children);},
       appendChild(child) {this.children.push(child);}, replaceChildren(...children) {this.children=children;}};
   }
@@ -132,13 +133,18 @@ test('old service and request failures explain the problem beside the clicked ca
 
 test('candidate inspection uses a top-level link without a blocked cross-origin frame',async()=>{
   const {context,node}=setup();
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../workbench_web/platform.js'),'utf8'),context);
+  context.crypto=require('node:crypto').webcrypto;context.initPlatform=()=>{};
   context.actorName=()=> 'automated test';
-  context.api=async()=>({url:'http://127.0.0.1:51053/',notice:'独立测试数据'});
+  const calls=[],plan={task_id:'TASK-TEST',plan_id:'PLAN-TEST',configuration_revision:1,expected_candidate_sha256:'sha-test',legacy:false};
+  context.api=async(url,options)=>{calls.push({url,method:options?.method || 'GET',body:options?.body?JSON.parse(options.body):null});return {...plan,url:'http://127.0.0.1:51053/',notice:'独立测试数据'};};
   const work=workflow('review');
   work.task={id:'TASK-TEST',status:'review',events:[]};
   context.renderInitiativeWork(work);
   context.initInitiativeWork();
   await node('iw-preview').onclick();
+  assert.equal(calls.length,1);assert.equal(calls[0].method,'GET');assert.equal(node('iw-preview-link').hidden,true);
+  await context.startPlatformPreview();assert.equal(calls.length,2);assert.equal(calls[1].body.plan_id,'PLAN-TEST');assert.equal(calls[1].body.confirmed,true);
   assert.equal(node('iw-preview-frame').hidden,true);
   assert.equal(node('iw-preview-link').hidden,false);
   assert.equal(node('iw-preview-link').href,'http://127.0.0.1:51053/');

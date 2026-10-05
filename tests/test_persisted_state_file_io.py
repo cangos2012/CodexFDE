@@ -4,12 +4,15 @@ import errno
 import json
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
 from agent import graph
 from workbench import file_io
 from workbench.subagent_coordination import SubagentCoordinator
+
+REAL_SLEEP = time.sleep
 
 
 @contextmanager
@@ -30,7 +33,7 @@ def sharing_lock(path, *, replacement=None, persistent=False):
         return original(target, mode, *args, **kwargs)
 
     with patch.object(file_io, '_WINDOWS', True), patch.object(Path, 'open', opened), \
-            patch.object(file_io.time, 'sleep') as slept:
+            patch.object(file_io.time, 'sleep', wraps=REAL_SLEEP) as slept:
         yield calls, slept, denied
 
 

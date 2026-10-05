@@ -41,6 +41,8 @@ class CandidateProjectEval:
         import hashlib
         checkpoint()
         before = manifest(self.workspace, self.runtime)
+        from .evidence_gate import eval_contract
+        contract = eval_contract(self.runtime, self.task_id, self.command)
         folder = self.runtime / 'project-reports' / self.task_id / secrets.token_hex(12)
         folder.mkdir(parents=True)
         report_path = folder / 'report.json'
@@ -51,7 +53,8 @@ class CandidateProjectEval:
         runner = CodexExecutionRunner(self.workspace, self.runtime)
         result = runner._run_codex_streaming(command, '', self.timeout, lambda line: None, time.monotonic())
         (folder / 'process.json').write_text(json.dumps({'command': command, 'cwd': str(self.workspace),
-            'returncode': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr}, ensure_ascii=False), encoding='utf-8')
+            'returncode': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr,
+            'contract': contract, 'candidate_sha256': fingerprint(before)}, ensure_ascii=False), encoding='utf-8')
         checkpoint()
         if result.returncode in {124, 127, 130}:
             reason = {124: '项目 Eval 超时', 127: '项目 Eval 命令无法启动', 130: '项目 Eval 已取消'}[result.returncode]
@@ -65,7 +68,9 @@ class CandidateProjectEval:
         report['runner'] = {'workspace': str(self.workspace), 'process_returncode': result.returncode,
                             'validated': True, 'label': self.label, 'report_path': str(report_path),
                             'candidate_sha256': fingerprint(before), 'command': command,
-                            'process_path': str(folder / 'process.json')}
+                            'process_path': str(folder / 'process.json'),
+                            'process_sha256': hashlib.sha256((folder / 'process.json').read_bytes()).hexdigest(),
+                            'configured_command': list(self.command), **contract}
         serialized = json.dumps(report, ensure_ascii=False)
         report_path.write_text(serialized, encoding='utf-8')
         persisted = read_bytes(report_path)

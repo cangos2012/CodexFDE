@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .platform_api import HarnessPlatformAPI
+from .harness_compatibility import HarnessCompatibilityProxy
 from .platform_bootstrap import bootstrap_default_project
 from .http_bind import ServerBindError, create_http_server, report_bind_error
 from .managed_flowerp import (
@@ -85,6 +86,8 @@ def make_handler(api: HarnessPlatformAPI):
                 return
 
         def do_POST(self) -> None:  # noqa: N802
+            if self.headers.get('Origin') and self.headers['Origin'] != 'http://' + self.headers.get('Host', ''):
+                return self._send(403, {'error':'cross_origin', 'message':'拒绝跨来源写入'})
             try: body = self._body()
             except (ValueError, json.JSONDecodeError) as exc:
                 return self._send(400, {"error": "invalid_json", "message": str(exc)})
@@ -100,8 +103,10 @@ def serve(host: str = "127.0.0.1", port: int = 8010,
           runtime_dir: str = ".harness-runtime", repository_root: str | Path | None = None,
           bootstrap: bool = False, with_flowerp: bool = False,
           flowerp_host: str = "127.0.0.1", flowerp_port: int = 8000,
-          flowerp_runtime_dir: str = ".runtime") -> None:
-    api = HarnessPlatformAPI(runtime_dir, repository_root)
+          flowerp_runtime_dir: str = ".runtime", upstream_url='http://127.0.0.1:8001') -> None:
+    if host not in {'127.0.0.1', 'localhost', '::1'}:
+        raise ValueError('兼容运行视图只允许本机绑定')
+    api = HarnessCompatibilityProxy(runtime_dir, repository_root, upstream_url)
     harness_url = f"http://{host}:{port}"
     startup: dict[str, object] = {
         "level": "INFO",
@@ -110,9 +115,12 @@ def serve(host: str = "127.0.0.1", port: int = 8010,
         "product": "Harness Workbench",
         "url": harness_url,
         "harness_url": harness_url,
+        "workbench_url": upstream_url,
+        "compatibility_view": True,
     }
     if bootstrap:
-        startup["bootstrap"] = bootstrap_default_project(api)
+        startup["bootstrap"] = {'status': 'delegated', 'workbench_url': upstream_url,
+                                'message': '项目登记由日常工作台管理，兼容入口不创建或修改旧库'}
     server = create_http_server(
         host,
         port,
@@ -147,6 +155,7 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8010)
     parser.add_argument("--runtime-dir", default=".harness-runtime")
     parser.add_argument("--repository-root")
+    parser.add_argument("--workbench-url", default="http://127.0.0.1:8001", help="唯一工作台入口的本机地址")
     parser.add_argument("--bootstrap", action="store_true",
                         help="启动时自动注册当前仓库为默认目标项目 PROJECT-FLOWERP")
     parser.add_argument("--boot", action="store_true",
@@ -167,6 +176,7 @@ def main() -> int:
             args.flowerp_host,
             args.flowerp_port,
             args.flowerp_runtime_dir,
+            args.workbench_url,
         )
     except ServerBindError as error:
         return report_bind_error(error)

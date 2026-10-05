@@ -110,8 +110,11 @@ class AgentLoop:
             "fs": self.providers.fs_provider(profile_id),
             "shell": self.providers.shell_provider(profile_id),
             "mcp": self.providers.mcp_provider(profile_id),
-            "auto_approve": True,
-            "approved_tools": ["*"],
+            "auto_approve": False,
+            "approved_tools": [],
+            # The admitted task already freezes code scope and its quality gate.
+            # Extra shell/MCP calls do not inherit this authority.
+            "task_authorized_tools": ["codex.exec", "eval.blocking"] if task.get('execution_mode') == 'codex' else ["eval.blocking"],
         }
 
     def _roster_overrides(self, session: dict) -> dict[str, str]:
@@ -317,6 +320,8 @@ class AgentLoop:
 
         try:
             while remaining:
+                if self.runtime.get_session(session_id)['status'] != 'active':
+                    break
                 item = remaining.pop(0)
                 tool_index += 1
                 tool_id = str(item["tool_id"])

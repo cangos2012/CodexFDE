@@ -4,11 +4,14 @@ import json
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
 from workbench import file_io
 from workbench.project_delivery import CandidateProjectEval
+
+REAL_SLEEP = time.sleep
 
 
 class ProjectReportReadTests(unittest.TestCase):
@@ -41,7 +44,7 @@ class ProjectReportReadTests(unittest.TestCase):
 
         result = subprocess.CompletedProcess(['fixture-eval'], 0, json.dumps(self.report), '')
         with patch.object(file_io, '_WINDOWS', True), patch.object(Path, 'open', locked), \
-                patch.object(file_io.time, 'sleep'), \
+                patch.object(file_io.time, 'sleep', wraps=REAL_SLEEP), \
                 patch('workbench.execution.CodexExecutionRunner._run_codex_streaming', return_value=result):
             return self.runner(), failures
 

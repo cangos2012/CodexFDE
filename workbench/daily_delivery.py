@@ -10,6 +10,7 @@ from .course_snapshot import source_paths, _git
 from .course_workspace import LessonSubprocessEvalRunner
 from .execution import CodexExecutionRunner, normalize_write_scope
 from .file_io import read_bytes
+from .reference_paths import resolve_reference, reference_mapping_scope, load_reference_mappings
 from .spec import parse_spec
 from .workflow import run_task
 
@@ -22,9 +23,11 @@ def snapshot_paths(root, runtime):
 
 
 def manifest(repository, runtime):
-    root = Path(repository).resolve()
-    return {p.relative_to(root).as_posix(): hashlib.sha256(read_bytes(p)).hexdigest()
-            for p in snapshot_paths(root, Path(runtime).resolve())}
+    runtime = Path(runtime).resolve()
+    with reference_mapping_scope(runtime, load_reference_mappings(runtime)):
+        root = resolve_reference(repository, runtime).resolve()
+        return {p.relative_to(root).as_posix(): hashlib.sha256(read_bytes(p)).hexdigest()
+                for p in snapshot_paths(root, runtime)}
 
 
 def prepare_daily(repository, runtime, actor, request, acceptance, write_scope, non_goals='不扩大本次需求范围', *, project=None):
@@ -113,9 +116,18 @@ def submit_daily(repository, runtime, tasks, plan, on_task_created, *, runner_fa
     # Existing green checks are normal for new development; do not manufacture red.
     checkpoint()
     if learning:
-        learning.validate_binding(binding_id, workspace)
+        try:
+            learning.validate_binding(binding_id, workspace)
+            contract = learning.check_phase(binding_id, 'precheck', workspace)
+        except (ValueError, OSError) as error:
+            evidence = {'passed': False, 'workspace': str(workspace), 'message': str(error),
+                        'stopped_phase': 'precheck', 'recovery': 'retain_candidate_new_plan'}
+            learning.run_event(binding_id, 'precheck', evidence)
+            tasks.transition(task['id'], 'failed', '流程前置检查失败，保留候选并重新确认授权', error=str(error))
+            learning.finish(task['id'], note=str(error))
+            raise
         evidence = {'passed': True, 'workspace': str(workspace), 'baseline': plan['source_sha256'],
-                    'checks': [a['prepared'] for a in binding['assets'] if a['prepared']]}
+                    'checks': [a['prepared'] for a in binding['assets'] if a['prepared']], 'phase_contract': contract}
         learning.run_event(binding_id, 'precheck', evidence)
         tasks.append_event(task['id'], '受控流程前置检查通过', actor='harness', evidence=evidence)
     runner = runner_factory(workspace, runtime)
@@ -129,17 +141,38 @@ def submit_daily(repository, runtime, tasks, plan, on_task_created, *, runner_fa
         if evidence.get('success') and not evidence.get('changed_files'):
             evidence = {**evidence, 'success': False, 'message': '没有实际文件改动，不能认定需求已实现'}
         if learning:
+            contract = {'checks': [], 'required_files': []}
+            if evidence.get('success') is True:
+                try:
+                    contract = learning.check_phase(binding_id, 'implement', workspace)
+                except (ValueError, OSError) as error:
+                    evidence = {**evidence, 'success': False, 'message': str(error),
+                                'stopped_phase': 'implement', 'recovery': 'retain_candidate_new_plan'}
+            diff = (evidence.get('artifacts') or {}).get('diff')
+            diff_artifact = {'path': diff, 'sha256': hashlib.sha256(Path(diff).read_bytes()).hexdigest()} if diff and Path(diff).is_file() else None
             learning.run_event(binding_id, 'implement', {'passed': evidence.get('success') is True,
                 'changed_files': evidence.get('changed_files', []), 'binding_sha256': binding['sha256'],
-                'message': evidence.get('message'), 'invocation': evidence.get('invocation')})
+                'message': evidence.get('message'), 'invocation': evidence.get('invocation'),
+                'phase_contract': contract, 'diff_artifact': diff_artifact,
+                'stopped_phase': evidence.get('stopped_phase'), 'recovery': evidence.get('recovery')})
         return evidence
     result = run_task(tasks, task['id'], plan['actor'], execution_runner=execute,
                       suite_runner=eval_factory(workspace, runtime, task['id'], cases, 'daily-after'))
     if learning:
         report = result.get('result') or {}
+        contract = {'checks': [], 'required_files': []}
+        if result['status'] == 'review':
+            try:
+                contract = learning.check_phase(binding_id, 'eval', workspace)
+            except (ValueError, OSError) as error:
+                result = tasks.transition(task['id'], 'rework', '流程输出检查未通过，禁止进入人工接受',
+                    actor='harness', error=str(error), evidence={'stopped_phase': 'eval',
+                    'recovery': 'retain_candidate_new_plan', 'message': str(error)})
         learning.run_event(binding_id, 'eval', {'passed': result['status'] == 'review',
             'summary': report.get('summary'), 'report_path': report.get('report_path'),
-            'report_sha256': report.get('report_sha256'), 'candidate_manifest': manifest(workspace, runtime)})
+            'report_sha256': report.get('report_sha256'), 'candidate_manifest': manifest(workspace, runtime),
+            'phase_contract': contract, 'stopped_phase': 'eval' if result['status'] != 'review' else None,
+            'recovery': 'retain_candidate_new_plan' if result['status'] != 'review' else None})
         learning.finish(task['id'])
     # Include new files in the patch without committing or touching the source index.
     for scope in plan['write_scope']:

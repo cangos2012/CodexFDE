@@ -40,6 +40,8 @@ class InitiativeWorkflow:
         self.lock = threading.RLock()
         self.workers = {}
         self.learning = LearningStore(tasks.path)
+        from .learning_generation import LearningGenerationService
+        self.learning_generation = LearningGenerationService(self.runtime, self.tasks, self.repository_for)
         with self.tasks.connect() as db:
             db.execute('CREATE TABLE IF NOT EXISTS initiative_workflows (id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
             rows = db.execute('SELECT id,payload FROM initiative_workflows').fetchall()
@@ -69,6 +71,9 @@ class InitiativeWorkflow:
         return Path(project['root_path']) if project else self.repository
 
     def preflight(self, item_id, *, require_eval=True):
+        from .migration import assert_migration_preflight
+        project = self.project(item_id)
+        assert_migration_preflight(self.runtime, project['id'] if project else None)
         if not self.projects:
             return
         import shutil
@@ -150,6 +155,10 @@ class InitiativeWorkflow:
             'id': item_id, 'revision': 0, 'stage': 'idle', 'initiative_version': item['version'],
             'messages': [], 'proposal': None, 'iterations': [], 'active_task_id': None,
             'workspace': None, 'plan': None, 'invocation': None, 'error': '', 'progress': []}
+
+    def workspace_path(self, path):
+        from .reference_paths import resolve_reference
+        return resolve_reference(path, self.runtime).resolve()
 
     def _save(self, data):
         data['revision'] += 1
@@ -310,7 +319,7 @@ class InitiativeWorkflow:
         # Keep that observation in messages and expose a fresh, inspectable check.
         data['source_check'] = None
         if data.get('research_manifest') is not None and data['stage'] in {'clarifying', 'ready', 'confirmed'}:
-            source = Path(data['workspace']) if data['workspace'] else self.repository_for(item_id)
+            source = self.workspace_path(data['workspace']) if data['workspace'] else self.repository_for(item_id)
             try:
                 current = manifest(source, self.runtime)
                 data['source_check'] = research_source_check(source, data['research_manifest'], current, data['proposal'])
@@ -353,6 +362,7 @@ class InitiativeWorkflow:
         data['ci_evidence'] = ci_view(data.get('ci_evidence_runs'))
         data['ci_evidence']['can_record'] = bool(data.get('active_task_id') and
                                                  data['stage'] in {'review', 'rework'})
+        data.setdefault('learning', {})['generations'] = self.learning_generation.list(item_id)
         return data
 
     def configure_loop(self, item_id, actor, revision, fields):
@@ -429,14 +439,33 @@ class InitiativeWorkflow:
         from .project_delivery import CandidateProjectEval
         with self.lock:
             data = self._load(item_id)
+        with self.tasks.connect() as db:
+            bound = db.execute('SELECT id FROM learning_bindings WHERE task_id=?', (data['active_task_id'],)).fetchone()
+        binding_id = bound['id'] if bound else None
+        binding_v2 = binding_id and any((a['snapshot'].get('recipe') or {}).get('schema_version') == 2
+                                       for a in self.learning.binding(binding_id)['assets'])
+        contract, contract_error = {'checks': [], 'required_files': []}, ''
         try:
+            candidate_changed = binding_id and manifest(data['workspace'], self.runtime) != data.get('candidate_manifest')
+            if binding_v2 and candidate_changed:
+                raise ValueError('采用流程的候选已变化，请重新确认返工方案与实际Diff')
             report = CandidateProjectEval(data['workspace'], self.runtime, data['active_task_id'],
                                           command, 'manual-recheck')()
+            if binding_id and report['summary']['decision'] == 'pass':
+                try:
+                    contract = self.learning.check_phase(binding_id, 'eval', data['workspace'])
+                except (ValueError, OSError) as error:
+                    contract_error = str(error)
+                if candidate_changed:
+                    contract_error = '采用流程的候选已变化，复验绿不能替代重新确认方案与实际Diff'
         except Exception as error:
             with self.lock:
                 current = self._load(item_id)
                 current.setdefault('eval_runs', []).append({'task_id': data['active_task_id'],
                     'actor': actor, 'at': time.time(), 'error': str(error)})
+                if binding_id:
+                    self.learning.record_recheck(binding_id, {'passed': False, 'phase_contract': contract,
+                        'message': str(error), 'stopped_phase': 'eval', 'recovery': 'retain_candidate_new_plan'})
                 self._save(current)
             raise
         with self.lock:
@@ -444,27 +473,45 @@ class InitiativeWorkflow:
             checkpoint()
             current = self._load(item_id)
             current.setdefault('eval_runs', []).append({'task_id': data['active_task_id'],
-                'actor': actor, 'at': time.time(), 'report': report})
-            passed = report['summary']['decision'] == 'pass'
+                'actor': actor, 'at': time.time(), 'report': report, 'phase_contract': contract,
+                'phase_error': contract_error})
+            passed = report['summary']['decision'] == 'pass' and not contract_error
             current['stage'] = prior if passed else 'rework'
-            if not passed and self.tasks.get(data['active_task_id'])['status'] == 'review':
-                # Keep the raw subprocess report in eval_runs, and freeze the
-                # task's failed result under the normal controlled report path.
-                # A named accepted failure can then be used as a learning source.
-                task_report = copy.deepcopy(report)
-                report_dir = self.runtime / 'reports'
-                report_dir.mkdir(parents=True, exist_ok=True)
-                report_path = report_dir / (data['active_task_id'] + '-' + secrets.token_hex(16) + '-manual-recheck.json')
-                task_report['report_path'] = (Path('reports') / report_path.name).as_posix()
-                task_report.pop('report_sha256', None)
-                payload = json.dumps(task_report, ensure_ascii=False, indent=2).encode('utf-8')
-                report_path.write_bytes(payload)
-                task_report['report_sha256'] = hashlib.sha256(payload).hexdigest()
-                self.tasks.transition(data['active_task_id'], 'rework', '候选复验存在阻断失败', actor=actor, result=task_report)
+            # Each recheck gets its own immutable report. The task points to the
+            # actual latest receipt even when the checks remain green.
+            task_report = copy.deepcopy(report)
+            report_dir = self.runtime / 'reports'
+            report_dir.mkdir(parents=True, exist_ok=True)
+            report_path = report_dir / (data['active_task_id'] + '-' + secrets.token_hex(16) + '-manual-recheck.json')
+            task_report['report_path'] = (Path('reports') / report_path.name).as_posix()
+            task_report.pop('report_sha256', None)
+            payload = json.dumps(task_report, ensure_ascii=False, indent=2).encode('utf-8')
+            report_path.write_bytes(payload)
+            task_report['report_sha256'] = hashlib.sha256(payload).hexdigest()
+            task = self.tasks.get(data['active_task_id'])
+            if task['status'] not in {'review', 'rework'}:
+                raise ValueError('复验期间任务状态已变化，保留报告但不覆盖审核结果')
+            if not passed and task['status'] == 'review':
+                self.tasks.transition(task['id'], 'rework', '候选复验或流程阶段约束未通过', actor=actor,
+                    result=task_report, error=contract_error or '候选Eval阻断失败')
+            else:
+                with self.tasks.connect() as db:
+                    updated = db.execute("UPDATE tasks SET result_json=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status=?",
+                                         (json.dumps(task_report, ensure_ascii=False), task['id'], task['status']))
+                    if updated.rowcount != 1:
+                        raise ValueError('复验期间任务状态已变化，拒绝覆盖审核结果')
+            if binding_id:
+                self.learning.record_recheck(binding_id, {'passed': passed, 'summary': report['summary'],
+                    'report_path': task_report['report_path'], 'report_sha256': task_report['report_sha256'],
+                    'candidate_manifest': manifest(data['workspace'], self.runtime), 'phase_contract': contract,
+                    'message': contract_error, 'stopped_phase': None if passed else 'eval',
+                    'recovery': None if passed else 'retain_candidate_new_plan'})
             if not passed:
-                self.learning.finish(data['active_task_id'], note='候选 Eval 复验存在阻断失败，停用已采用流程并保留失败证据')
+                self.learning.finish(data['active_task_id'], note=contract_error or '候选 Eval 复验存在阻断失败，停用已采用流程并保留失败证据')
             self.tasks.append_event(data['active_task_id'], '候选 Eval 复验完成', actor=actor,
-                                    evidence={'summary': report['summary'], 'runner': report['runner']})
+                                    evidence={'summary': report['summary'], 'runner': report['runner'],
+                                        'report_path': task_report['report_path'], 'report_sha256': task_report['report_sha256'],
+                                        'phase_contract': contract, 'phase_error': contract_error})
             self._event(current, 'system', '候选复验完成；检查通过仍需人审。' if passed else '候选复验未通过，请返工。')
             self._save(current)
 
@@ -479,6 +526,12 @@ class InitiativeWorkflow:
             self._check(data, revision, {'idle', 'clarifying', 'ready', 'confirmed', 'review', 'rework',
                                         'failed', 'interrupted', 'cancelled', 'accepted', 'integrated', 'released', 'observed'})
             action = fields.get('action')
+            if action == 'generate':
+                self.learning_generation.start(item_id, actor, fields)
+                return self.get(item_id)
+            if action == 'cancel_generation':
+                self.learning_generation.cancel(item_id, fields.get('generation_id'), actor)
+                return self.get(item_id)
             try:
                 if action == 'create':
                     asset = self.learning.create(item_id, actor, fields.get('candidate'))
@@ -600,7 +653,7 @@ class InitiativeWorkflow:
             data = self._load(item_id)
         if isinstance(self.researcher, InitiativeResearch):
             self.preflight(item_id, require_eval=False)
-        source = Path(data['workspace']) if data['workspace'] else self.repository_for(item_id)
+        source = self.workspace_path(data['workspace']) if data['workspace'] else self.repository_for(item_id)
         folder = self.runtime / 'initiative-research' / item_id / secrets.token_hex(12)
         item = self.initiatives.get(item_id)
         recall = self.learning.recall(item_id, self._learning_query(item, data))
@@ -658,7 +711,7 @@ class InitiativeWorkflow:
                 raise ValueError('请先分别确认 PRD，再确认技术方案')
             if not data.get('documents'):
                 self._documents(data, item, proposal)
-            source = Path(data['workspace']) if data['workspace'] else self.repository_for(item_id)
+            source = self.workspace_path(data['workspace']) if data['workspace'] else self.repository_for(item_id)
             if research_source_check(source, data['research_manifest'], manifest(source, self.runtime), proposal)['files']:
                 raise ValueError('调研所依据的源码已变化，请重新调研')
             plan = prepare_daily(source, self.runtime, actor, proposal['goal'], '\n'.join(proposal['acceptance']),
@@ -667,14 +720,14 @@ class InitiativeWorkflow:
                 raise ValueError('确认期间源码已变化，请重新调研')
             plan['spec_text'] += '\n\n产品与技术方案版本：\n\n' + json.dumps(data['documents'][-1], ensure_ascii=False)
             plan.update(plan_id=secrets.token_hex(18), expires_at=time.time() + 900)
+            if hasattr(self, 'delivery_runtime'):
+                self.delivery_runtime.freeze_profile(item_id, plan)
             binding = self.learning.bind(item_id, plan['plan_id'], data.get('learning_decision'), source, actor)
             if binding:
                 plan['learning_binding_id'] = binding['id']
                 # Source trajectories remain in the store. Only adopted bounded
                 # conclusions and the executable recipe enter the frozen Spec.
-                adopted = [{k: a['snapshot'][k] for k in ('id', 'version', 'kind', 'title', 'content', 'boundary')} |
-                           {'parameters': a['parameters'], 'prepared': a['prepared'], 'sha256': a['sha256']}
-                           for a in binding['assets']]
+                adopted = [self.learning.execution_summary(a) for a in binding['assets']]
                 plan['spec_text'] += '\n\n已具名采用的经验与受控流程（不得扩大写集或绕过审批）：\n' + canonical(adopted)
             plan['document_version'] = data['document_version']
             data['documents'][-1]['technical_confirmation'] = {'actor': actor, 'at': time.time(), 'version': data['document_version']}
@@ -704,7 +757,9 @@ class InitiativeWorkflow:
         actor = self.actor(actor)
         if not self.enabled:
             raise ValueError('当前服务未启用代码执行')
-        if self.submitter is submit_daily:
+        if hasattr(self, 'project_plans'):
+            self.project_plans.assert_ready(item_id)
+        if getattr(self, 'require_preflight', self.submitter is submit_daily):
             try:
                 self.preflight(item_id)
             except (OSError, ValueError, TimeoutError) as error:
@@ -725,7 +780,7 @@ class InitiativeWorkflow:
             if self.initiatives.get(item_id)['version'] != data['initiative_version']:
                 raise ValueError('已确认的事项发生变化，请重新核对')
             if data['plan'].get('learning_binding_id'):
-                source = Path(data['workspace']) if data['workspace'] else self.repository_for(item_id)
+                source = self.workspace_path(data['workspace']) if data['workspace'] else self.repository_for(item_id)
                 try:
                     self.learning.validate_binding(data['plan']['learning_binding_id'], source)
                 except (ValueError, KeyError, OSError) as error:
@@ -753,7 +808,7 @@ class InitiativeWorkflow:
 
     def _execute_serial(self, item_id, actor):
         data = self._load(item_id)
-        source = Path(data['workspace']) if data['workspace'] else self.repository_for(item_id)
+        source = self.workspace_path(data['workspace']) if data['workspace'] else self.repository_for(item_id)
         def created(task):
             with self.lock:
                 current = self._load(item_id)
@@ -839,7 +894,7 @@ class InitiativeWorkflow:
     def _apply_integration(self, item_id, actor):
         data = self._load(item_id)
         repository = self.repository_for(item_id)
-        workspace = Path(data['workspace'])
+        workspace = self.workspace_path(data['workspace'])
         candidate = manifest(workspace, self.runtime)
         if candidate != data['candidate_manifest']:
             raise ValueError('候选已变化，请重新复验和验收')

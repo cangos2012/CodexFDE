@@ -55,9 +55,9 @@ class WindowsJob:
 
     def close(self):
         if self.handle:
-            handle, self.handle = self.handle, None
-            if not self.api.CloseHandle(handle):
+            if not self.api.CloseHandle(self.handle):
                 raise ctypes.WinError(ctypes.get_last_error())
+            self.handle = None
 
 
 def spawn(command, cwd, *, env=None):

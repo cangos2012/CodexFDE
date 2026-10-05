@@ -29,10 +29,10 @@ function showInitiative(item) {
   initiativeInput('area').disabled = !!(item && item.decision) || areas.length > 1 ||
     (areas.length === 1 && !['inventory','money','order','purchase','auth'].includes(areas[0]));
   document.getElementById('save-initiative').hidden = !!(item && item.decision);
-  document.getElementById('save-initiative').disabled = false;
+  document.getElementById('save-initiative').disabled = typeof workbenchWritesFrozen==='function' && workbenchWritesFrozen();
   document.getElementById('initiative-decision').hidden = !item || !!item.decision;
   document.getElementById('initiative-saved-decision').hidden = !item || !item.decision;
-  document.getElementById('decide-initiative').disabled = false;
+  document.getElementById('decide-initiative').disabled = typeof workbenchWritesFrozen==='function' && workbenchWritesFrozen();
   ['rationale','trigger'].forEach(id=>initiativeInput(id).value = '');
   if (item) {
     const labels = {evidence:'已有证据',problem_statement:'具体问题',project_id:'项目',goal:'期望结果',acceptance:'验收标准',reviewer:'验收负责人'};
@@ -103,7 +103,7 @@ async function saveInitiative(event) {
     showInitiative(result);const savedEditorVersion=initiativeEditorVersion;
     const refreshed = await refreshInitiatives();if(savedEditorVersion===initiativeEditorVersion)show('initiative-status',refreshed ? '事项已保存，可继续补充或留下决定。' : '事项已保存，但列表暂不可读，请重新打开事项与决策。');
   } catch(error) {if(editorVersion===initiativeEditorVersion)show('initiative-status','尚未确认保存：' + error.message + '。请先核对事项列表，避免重复新建。');}
-  finally {if(editorVersion===initiativeEditorVersion){controls.forEach(({element,disabled})=>element.disabled=disabled);button.disabled=false;}}
+  finally {if(editorVersion===initiativeEditorVersion){controls.forEach(({element,disabled})=>element.disabled=disabled);button.disabled=typeof workbenchWritesFrozen==='function' && workbenchWritesFrozen();}}
 }
 async function decideInitiative() {
   if(!currentInitiative || currentInitiative.decision) return;
@@ -113,7 +113,7 @@ async function decideInitiative() {
   try {
     const result=await api('/api/v1/initiatives/' + currentInitiative.id + '/decide', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor:actorName(),version:currentInitiative.version,decision:initiativeInput('decision').value,rationale:initiativeInput('rationale').value.trim(),review_trigger:initiativeInput('trigger').value.trim()})});
     showInitiative(result); const refreshed = await refreshInitiatives(); show('initiative-status',refreshed ? '决定与署名已保存。代码尚未执行。' : '决定已保存，但列表暂不可读，请重新打开事项与决策。');
-  }catch(error){show('initiative-status','决定未确认：' + error.message);}finally{button.disabled=false;}
+  }catch(error){show('initiative-status','决定未确认：' + error.message);}finally{button.disabled=typeof workbenchWritesFrozen==='function' && workbenchWritesFrozen();}
 }
 function initInitiatives() {
   initInitiativeWork();
@@ -141,6 +141,7 @@ async function loadInitiativeProjects() {
   } catch(error){show('project-status',error.message);}
 }
 let projectEditing=null, projectPending=false, projectRegistrationAvailable=true;
+let projectConfigurationRevision=null;
 function projectField(id) {return document.getElementById('project-'+id);}
 function projectSourceView() {
   const git=projectField('source').value==='git';
@@ -152,11 +153,18 @@ function projectSourceView() {
 function editRegisteredProject(project=null) {
   if(projectPending)return;
   projectEditing=project;
+  projectConfigurationRevision=project?.configuration_revision ?? null;
   projectField('source').value='local';
   projectField('name').value=project?.name || '';
   projectField('root').value=project?.root_path || '';
   projectField('url').value='';
   projectField('eval').value=project?.eval_command?.length ? JSON.stringify(project.eval_command,null,2) : '';
+  const preview=project?.preview_config || {};
+  projectField('preview-command').value=preview.command?.length ? JSON.stringify(preview.command,null,2) : '';
+  projectField('preview-health').value=preview.health?.path || '/health';
+  projectField('preview-expected').value=preview.health?.expected ? JSON.stringify(preview.health.expected,null,2) : '';
+  projectField('preview-timeout').value=preview.timeout_seconds || 15;
+  projectField('deployments').value=project?.deployment_profiles?.length ? JSON.stringify(project.deployment_profiles,null,2) : '';
   projectField('default').checked=false;
   ['source','name','root'].forEach(id=>projectField(id).disabled=!!project);
   projectField('form-title').textContent=project ? '配置项目：'+project.name : '添加项目';
@@ -166,7 +174,7 @@ function editRegisteredProject(project=null) {
 }
 function renderRegisteredProjects(body) {
   projectRegistrationAvailable=!!body.registration?.sources?.includes('git');
-  projectField('register').disabled=projectPending || !projectRegistrationAvailable;
+  projectField('register').disabled=projectPending || !projectRegistrationAvailable || typeof workbenchWritesFrozen==='function' && workbenchWritesFrozen();
   if(!projectRegistrationAvailable)show('project-status','当前服务尚未加载新版添加项目功能，请重启工作台服务后刷新页面。');
   const list=projectField('list');list.replaceChildren();
   body.items.forEach(project=>{
@@ -182,9 +190,15 @@ function projectRegistrationPayload() {
   let command=[];
   if(raw){try{command=JSON.parse(raw);}catch(_){throw new Error('质量检查命令不是有效的 JSON 数组；也可以先留空。');}}
   if(!Array.isArray(command) || command.some(p=>typeof p!=='string'||!p.trim()))throw new Error('质量检查命令须为字符串参数数组。');
+  const parse=(id,fallback)=>{const value=projectField(id).value.trim();if(!value)return fallback;try{return JSON.parse(value);}catch(_){throw new Error('预览或发布配置不是有效的 JSON，请核对输入。');}};
+  const previewCommand=parse('preview-command',[]),deploymentProfiles=parse('deployments',[]);
+  if(!Array.isArray(previewCommand) || previewCommand.some(p=>typeof p!=='string'||!p.trim()))throw new Error('预览命令须为字符串参数数组。');
+  if(!Array.isArray(deploymentProfiles))throw new Error('发布环境配置须为 JSON 数组。');
+  const preview=previewCommand.length ? {command:previewCommand,health:{path:projectField('preview-health').value.trim() || '/health',expected:parse('preview-expected',{status:'ok'})},timeout_seconds:Number(projectField('preview-timeout').value) || 15} : null;
   return {actor:actorName(),name:projectField('name').value.trim(),source_type:projectField('source').value,
     root_path:projectField('root').value.trim(),git_url:projectField('url').value.trim(),
-    initialize_git:projectField('init').checked,make_default:projectField('default').checked,eval_command:command};
+    initialize_git:projectField('init').checked,make_default:projectField('default').checked,eval_command:command,
+    preview_config:preview,deployment_profiles:deploymentProfiles,...(projectConfigurationRevision!==null ? {expected_configuration_revision:projectConfigurationRevision} : {})};
 }
 projectField('source').onchange=projectSourceView;
 projectField('new').onclick=()=>editRegisteredProject();
@@ -202,12 +216,15 @@ projectField('register').onclick=async function() {
   let payload;
   try{payload=projectRegistrationPayload();if(!payload.actor)throw new Error('请先填写上方的操作署名。');}
   catch(error){show('project-status',error.message);return;}
+  if(typeof platformKey==='function')payload.submission_key=platformKey('project-settings/'+(projectEditing?.id || 'new'),payload);
   projectPending=true;this.disabled=true;
-  ['source','name','root','url','eval','init','default'].forEach(id=>projectField(id).disabled=true);
+  ['source','name','root','url','eval','init','default','preview-command','preview-health','preview-expected','preview-timeout','deployments'].forEach(id=>projectField(id).disabled=true);
   show('project-status',projectEditing?'正在保存配置…':payload.source_type==='git'?'正在克隆并添加项目，请勿重复提交；较大仓库可能需要两分钟。':'正在检查本地目录并添加项目…');
   try {
     const endpoint=projectEditing ? '/api/v1/projects/'+encodeURIComponent(projectEditing.id)+'/settings' : '/api/v1/projects';
-    const project=await api(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const project=await (payload.submission_key && typeof platformPost==='function' ? platformPost(endpoint,payload) : api(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}));
+    projectConfigurationRevision=project.configuration_revision ?? projectConfigurationRevision;
+    if(projectEditing)projectEditing=project;
     await loadInitiativeProjects();if(!currentInitiative){
       if(typeof WorkbenchDrafts!=='undefined')WorkbenchDrafts.detach(['initiative']);
       initiativeInput('project').value=project.id;
@@ -216,7 +233,7 @@ projectField('register').onclick=async function() {
     show('project-status','已保存项目：'+project.name+' · '+project.root_path+(project.eval_command.length?'':'。可以开始调研；代码交付前请配置质量检查命令。'));
     if(typeof refreshProjectHome==='function')refreshProjectHome();
   } catch(error){show('project-status','添加或配置失败：'+error.message+'。若连接中断，请先刷新项目列表核对结果。');}
-  finally{projectPending=false;this.disabled=!projectRegistrationAvailable;
-    ['source','name','root','url','eval','init','default'].forEach(id=>projectField(id).disabled=!!projectEditing && ['source','name','root'].includes(id));
+  finally{projectPending=false;const frozen=typeof workbenchWritesFrozen==='function' && workbenchWritesFrozen();this.disabled=!projectRegistrationAvailable || frozen;
+    ['source','name','root','url','eval','init','default','preview-command','preview-health','preview-expected','preview-timeout','deployments'].forEach(id=>projectField(id).disabled=frozen || !!projectEditing && ['source','name','root'].includes(id));
     projectField('list').querySelectorAll('button').forEach(b=>b.disabled=!projectRegistrationAvailable);}
 };

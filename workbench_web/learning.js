@@ -55,6 +55,43 @@ function renderLearning(data) {
   }
   assets.querySelectorAll('button,textarea').forEach(b=>b.disabled=busy);
   iw('learning-evidence').textContent=JSON.stringify({metrics:learning.metrics,bindings:learning.bindings},null,2);
+  renderLearningGeneration(data,busy);
+}
+function learningChecks(value) {
+  return value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean).map(line=>{
+    const index=line.indexOf('|'),path=(index<0?line:line.slice(0,index)).trim(),text=index<0?'':line.slice(index+1).trim();
+    return text ? {kind:'file_contains',path,text} : {kind:'file_exists',path};
+  });
+}
+function learningCheckText(rows){return (rows || []).map(row=>row.path+(row.kind==='file_contains'?' | '+row.text:'')).join('\n');}
+function learningEvidenceRefs(value) {
+  return value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean).map(line=>{
+    const index=line.lastIndexOf('|');if(index<1)throw new Error('每条来源对应须填写：结论 | 证据编号');
+    return {claim:line.slice(0,index).trim(),evidence_id:line.slice(index+1).trim()};
+  });
+}
+function renderLearningGeneration(data,busy) {
+  const generations=data.learning?.generations || (data.learning?.generation ? [data.learning.generation] : []),latest=generations.slice(-1)[0];
+  iw('learning-generate').disabled=busy || !iw('learning-task').value || latest?.status==='running';
+  iw('learning-cancel-generation').hidden=latest?.status!=='running';iw('learning-cancel-generation').disabled=initiativeWorkPending;
+  iw('learning-use-generation').hidden=latest?.status!=='succeeded' || !latest.candidate;iw('learning-use-generation').disabled=busy;
+  iw('learning-generation-status').textContent=latest ? ({running:'正在从原始轨迹提炼；尚未保存为经验',succeeded:'草稿已生成，请先核对结论、适用边界与来源',failed:'生成失败，原始轨迹保留',cancelled:'已停止生成，记录保留',interrupted:'服务重启中断；旧任务不会自动重放'}[latest.status] || '生成状态待核对')+(latest.error ? '：'+latest.error : '') : '选择实际来源任务后生成草稿；生成与保存候选是两个决定。';
+  iw('learning-generation-evidence').textContent=latest ? JSON.stringify({id:latest.id,task_id:latest.task_id,input_sha256:latest.input_sha256,output_sha256:latest.output_sha256,candidate:latest.candidate,evidence_refs:latest.evidence_refs},null,2) : '';
+}
+function useLearningGeneration() {
+  const latest=initiativeWork?.learning?.generations?.slice(-1)[0] || initiativeWork?.learning?.generation;
+  if(!latest || latest.status!=='succeeded' || !latest.candidate || !initiativeWorkReadable)return;
+  const c=latest.candidate,recipe=c.recipe || {};
+  const values={kind:c.kind,task:c.task_id,feedback:c.feedback_id,supersedes:c.supersedes,title:c.title,content:c.content,applies:c.applies,excludes:c.excludes,boundary:c.boundary,conflict:c.conflict_key,
+    parameters:recipe.parameters,paths:(recipe.preconditions || []).map(p=>p.path),contains:(recipe.preconditions || []).every(p=>p.text===(recipe.preconditions || [])[0]?.text) ? recipe.preconditions?.[0]?.text : '',outputs:recipe.outputs,stop:recipe.stop,rollback:recipe.rollback,
+    'generation-id':c.generation_id || latest.id,'evidence-refs':(c.evidence_refs || latest.evidence_refs || []).map(r=>r.claim+' | '+r.evidence_id),schema:String(recipe.schema_version || 1),
+    'check-preconditions':learningCheckText(recipe.preconditions),'check-precheck':learningCheckText(recipe.stage_checks?.precheck),'check-implement':learningCheckText(recipe.stage_checks?.implement),'check-eval':learningCheckText(recipe.stage_checks?.eval),
+    'required-implement':(recipe.required_files || []).filter(r=>r.phase==='implement').map(r=>r.path),'required-eval':(recipe.required_files || []).filter(r=>r.phase==='eval').map(r=>r.path)};
+  for(const step of recipe.steps || [])values[step.phase]=step.instruction;
+  for(const [key,value] of Object.entries(values)){const el=iw('learning-'+key);if(el)el.value=Array.isArray(value)?value.join('\n'):String(value || '');}
+  iw('learning-kind').onchange();iw('learning-schema').onchange();
+  iw('learning-candidate').open=true;iw('learning-generation-status').textContent='草稿已填入表单；请逐项修订并具名保存候选，随后仍需独立审核。';
+  iw('learning-title').dispatchEvent(new Event('input',{bubbles:true}));
 }
 function renderLearningSources(data,busy) {
   const sources=data.learning_sources || {tasks:[],feedback:[]}, task=iw('learning-task');
@@ -91,6 +128,11 @@ function initLearning() {
   };
   iw('learning-recall').onclick=()=>learningAction({action:'recall'});
   iw('learning-trial').onclick=()=>learningAction({action:'recall',trials:true});
+  iw('learning-schema').onchange=()=>iw('learning-v2').hidden=iw('learning-schema').value!=='2';
+  iw('learning-generate').onclick=()=>learningAction({action:'generate',kind:iw('learning-kind').value,task_id:iw('learning-task').value,
+    feedback_id:iw('learning-feedback').value,supersedes:iw('learning-supersedes').value.trim(),guidance:iw('learning-guidance').value.trim()});
+  iw('learning-cancel-generation').onclick=()=>{const latest=initiativeWork?.learning?.generations?.slice(-1)[0] || initiativeWork?.learning?.generation;if(latest)learningAction({action:'cancel_generation',generation_id:latest.id});};
+  iw('learning-use-generation').onclick=useLearningGeneration;
   iw('learning-decide').onclick=()=>{
     const choices=[...iw('learning-matches').querySelectorAll('article[data-asset-id]')].map(card=>{
       const value=card.querySelector('[data-choice="adopt"]').value;
@@ -102,10 +144,17 @@ function initLearning() {
   iw('learning-create').onclick=()=>{
     const value=k=>iw('learning-'+k).value.trim(), lines=k=>value(k).split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
     const candidate={kind:value('kind'),task_id:value('task'),feedback_id:value('feedback'),supersedes:value('supersedes'),title:value('title'),content:value('content'),applies:lines('applies'),excludes:lines('excludes'),boundary:value('boundary'),conflict_key:value('conflict') || value('title')};
+    try {candidate.evidence_refs=learningEvidenceRefs(value('evidence-refs'));}catch(error){iw('error').textContent=error.message;return;}
+    if(value('generation-id'))candidate.generation_id=value('generation-id');
     if(candidate.kind==='workflow')candidate.recipe={parameters:lines('parameters'),
       preconditions:lines('paths').map(path=>value('contains') ? {kind:'file_contains',path,text:value('contains')} : {kind:'file_exists',path}),
       steps:['precheck','implement','eval','review'].map((phase,i,all)=>({phase,role:['harness','codex','harness','human'][i],depends_on:i ? [all[i-1]] : [],instruction:value(phase)})),
       authorization:'confirmed_plan',eval_entry:'project_blocking',outputs:lines('outputs'),stop:value('stop'),rollback:value('rollback')};
+    if(candidate.recipe && value('schema')==='2')Object.assign(candidate.recipe,{schema_version:2,
+      preconditions:learningChecks(value('check-preconditions') || lines('paths').map(path=>path+(value('contains')?' | '+value('contains'):'')).join('\n')),
+      stage_checks:Object.fromEntries(['precheck','implement','eval'].map(phase=>[phase,learningChecks(value('check-'+phase))])),
+      required_files:['implement','eval'].flatMap(phase=>lines('required-'+phase).map(path=>({phase,path}))),
+      required_evidence:['precheck','implementation_diff','project_eval','human_review'],recovery:'retain_candidate_new_plan'});
     learningAction({action:'create',candidate});
   };
 }

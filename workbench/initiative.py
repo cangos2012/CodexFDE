@@ -119,7 +119,7 @@ class InitiativeStore:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path).resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.connect() as conn:
+        with self.connect(create=True) as conn:
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS initiatives(
@@ -187,9 +187,10 @@ class InitiativeStore:
                 )
 
     @contextmanager
-    def connect(self) -> Iterator[sqlite3.Connection]:
+    def connect(self, *, create=False) -> Iterator[sqlite3.Connection]:
         with runtime_write_guard(self.path):
-            conn = sqlite3.connect(self.path, timeout=15)
+            conn = sqlite3.connect(self.path, timeout=15) if create else sqlite3.connect(
+                self.path.as_uri() + '?mode=rw', uri=True, timeout=15)
             conn.row_factory = sqlite3.Row
             try:
                 yield conn

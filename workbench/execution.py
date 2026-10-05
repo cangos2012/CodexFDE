@@ -109,7 +109,8 @@ class CodexExecutionRunner:
     Codex exits. Human review remains a separate workflow state.
     """
 
-    _process_lock = threading.Lock()
+    _workspace_locks = {}
+    _workspace_locks_guard = threading.Lock()
 
     def __init__(
         self,
@@ -185,7 +186,11 @@ class CodexExecutionRunner:
         timeout = int(task.get("execution_timeout_seconds", 900))
         if not 30 <= timeout <= 3600:
             raise ValueError("execution_timeout_seconds 必须在 30..3600")
-        with self._process_lock, self._workspace_lock(timeout=min(timeout, 60)):
+        timeout = min(timeout, max(1, int(task.get('_runtime_timeout_seconds', timeout))))
+        key = os.path.normcase(str(self.workspace_root))
+        with self._workspace_locks_guard:
+            process_lock = self._workspace_locks.setdefault(key, threading.Lock())
+        with process_lock, self._workspace_lock(timeout=min(timeout, 60)):
             return self._run_codex(task, scopes, timeout, on_codex_line=on_codex_line)
 
     def _run_codex(
@@ -324,6 +329,10 @@ class CodexExecutionRunner:
         stdout_parts: list[str] = []
         stderr_parts: list[str] = []
         lines = queue.Queue()
+        from .execution_control import cancelled
+        control = getattr(self, 'control_event', None)
+        if cancelled() or (control is not None and control.is_set()):
+            return subprocess.CompletedProcess(command, 130, stdout='', stderr='任务已取消，未启动进程')
         try:
             from .codex_options import headless_environment
             process, owner, prefix = spawn_owned_process(command, self.workspace_root, env=headless_environment())
@@ -358,7 +367,8 @@ class CodexExecutionRunner:
         try:
             while len(ended) < 2 or process.poll() is None:
                 from .execution_control import cancelled
-                if cancelled():
+                control = getattr(self, 'control_event', None)
+                if cancelled() or (control is not None and control.is_set()):
                     stderr_parts.append('任务已取消')
                     was_cancelled = True
                     break
@@ -545,7 +555,10 @@ class CodexExecutionRunner:
 
     @contextmanager
     def _workspace_lock(self, timeout: int) -> Iterator[None]:
-        lock_path = self.runtime_dir / "delivery-code.lock"
+        # Different isolated candidates can execute concurrently. The same
+        # candidate keeps a process-independent lease across runtime directories.
+        key = hashlib.sha256(os.path.normcase(str(self.workspace_root)).encode()).hexdigest()[:24]
+        lock_path = self.workspace_root.parent / ('.delivery-code-' + key + '.lock')
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         handle = lock_path.open("a+b")
         if handle.tell() == 0:

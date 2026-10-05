@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Iterator
 
 from .execution import normalize_write_scope
+from .file_io import read_text
+from .reference_paths import reference_mapping_scope
 
 
 VALID_TRANSITIONS = {
@@ -33,7 +35,7 @@ class TaskStore:
     def __init__(self, path: str | Path = ".runtime/workbench.db") -> None:
         self.path = str(path)
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        with self.connect() as conn:
+        with self.connect(create=True) as conn:
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS tasks(
@@ -95,10 +97,11 @@ class TaskStore:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
 
     @contextmanager
-    def connect(self) -> Iterator[sqlite3.Connection]:
+    def connect(self, *, create=False) -> Iterator[sqlite3.Connection]:
         from .maintenance import runtime_write_guard
         with runtime_write_guard(self.path):
-            conn = sqlite3.connect(self.path)
+            conn = sqlite3.connect(self.path) if create else sqlite3.connect(
+                Path(self.path).resolve().as_uri() + '?mode=rw', uri=True)
             conn.row_factory = sqlite3.Row
             try:
                 yield conn
@@ -198,7 +201,9 @@ class TaskStore:
         if path.suffix.lower() != '.md':
             raise ValueError('Spec 必须是 Markdown 文件')
         try:
-            raw = path.read_text(encoding='utf-8')
+            # A newly submitted Spec is a physical input, not a historical ref.
+            with reference_mapping_scope(Path(self.path).parent, {}):
+                raw = read_text(path, encoding='utf-8')
         except (OSError, UnicodeError) as exc:
             raise ValueError(f'Spec 无法读取：{path}') from exc
         parsed = parse_spec(raw).as_dict()
@@ -357,9 +362,22 @@ class TaskStore:
         evidence: object = None,
         **payload: object,
     ) -> dict:
+        acceptance_learning = None
+        if to_status == 'completed':
+            from .evidence_gate import assert_current_evidence
+            current_evidence = self.get(task_id)
+            if 'result' in payload:
+                current_evidence['result'] = payload['result']
+            assert_current_evidence(current_evidence, Path(self.path).resolve().parent)
+            with self.connect() as check_db:
+                has_learning = check_db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='learning_bindings'").fetchone()
+            if has_learning:
+                from .learning import LearningStore
+                acceptance_learning = LearningStore(self.path)
+                acceptance_learning.check_acceptance(task_id)
         with self.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute("SELECT status,result_json FROM tasks WHERE id=?", (task_id,)).fetchone()
+            row = conn.execute("SELECT status,result_json,version FROM tasks WHERE id=?", (task_id,)).fetchone()
             if not row:
                 raise KeyError(task_id)
             current = row["status"]
@@ -369,12 +387,17 @@ class TaskStore:
             decision = str(payload.get("review_decision", "")).strip()
             review_note = str(payload.get("review_note", "")).strip()
             if to_status == "completed":
+                if row['version'] != current_evidence['version']:
+                    raise ValueError('任务证据版本已变化，请重新读取并审核')
                 if not reviewer or decision != "approve":
                     raise ValueError("完成交付必须由具名审核人明确 approve")
+                from .agent_roster import assert_boss_actor
+                assert_boss_actor(reviewer)
                 result = json.loads(row["result_json"]) if row["result_json"] else {}
                 summary = result.get("summary", {}) if isinstance(result, dict) else {}
                 if summary.get("decision") != "pass" or int(summary.get("blocking_failed", 0)) != 0:
                     raise ValueError("阻断级 Eval 未通过，不能批准完成")
+                assert_current_evidence(current_evidence, Path(self.path).resolve().parent)
             spec_json = json.dumps(payload.get("spec"), ensure_ascii=False) if "spec" in payload else None
             result_json = json.dumps(payload.get("result"), ensure_ascii=False) if "result" in payload else None
             error = str(payload.get("error")) if payload.get("error") else None
@@ -394,6 +417,8 @@ class TaskStore:
                 (task_id, current, to_status, detail, actor.strip() or "system",
                  json.dumps(evidence, ensure_ascii=False) if evidence is not None else None),
             )
+        if acceptance_learning:
+            acceptance_learning.finish(task_id, note=str(payload.get('review_note', '')))
         return self.get(task_id)
 
     def review(self, task_id: str, reviewer: str, decision: str, note: str) -> dict:
@@ -406,6 +431,9 @@ class TaskStore:
             raise ValueError("审核决定必须是 approve 或 reject")
         if not note:
             raise ValueError("审核理由不能为空")
+        if decision == 'approve':
+            from .evidence_gate import assert_current_evidence
+            assert_current_evidence(self.get(task_id), Path(self.path).resolve().parent)
         with self.connect() as conn:
             has_learning = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='learning_bindings'").fetchone()
         learning = None

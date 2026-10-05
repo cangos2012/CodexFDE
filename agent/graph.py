@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from eval.harness import run_suite
-from workbench.file_io import read_text
+from workbench.file_io import atomic_write_text, read_text
 from .repair import build_repair_task
 
 
@@ -54,7 +54,7 @@ def _save_state(path: Path | None, state: DeliveryState) -> None:
     if not path:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(_result(state), ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(path, json.dumps(_result(state), ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def run_graph(max_rounds: int = 3, reject_once: bool = False, *, require_human_review: bool = False,

@@ -54,10 +54,12 @@ def main() -> int:
     workbench_serve_cmd.add_argument("--runtime-dir", help="覆盖本机 services.json 中保存的数据目录")
     workbench_serve_cmd.add_argument('--erp-url', default='http://127.0.0.1:8000', help='客户项目的本机地址')
     workbench_serve_cmd.add_argument("--enable-code-execution", action="store_true", help="允许在网页确认课程方案后授权隔离代码执行")
+    workbench_serve_cmd.add_argument('--enable-advanced-runtime', action='store_true', help='启用同一事项中的Session、工具授权和受管多AI分工')
     harness_serve_cmd = sub.add_parser("harness-serve", help="可选平台：完整 Harness（:8010，非大纲通过项）")
     harness_serve_cmd.add_argument("--host", default="127.0.0.1")
     harness_serve_cmd.add_argument("--port", type=int, default=8010)
     harness_serve_cmd.add_argument("--runtime-dir", default=".harness-runtime")
+    harness_serve_cmd.add_argument('--workbench-url', default='http://127.0.0.1:8001', help='唯一工作台根地址；自定义端口时同步设置')
     harness_serve_cmd.add_argument("--repository-root")
     harness_serve_cmd.add_argument("--bootstrap", action="store_true",
                                    help="启动时自动注册当前仓库为 PROJECT-FLOWERP")
@@ -182,6 +184,10 @@ def main() -> int:
     task_show_cmd.add_argument("task_id"); task_show_cmd.add_argument("--runtime-dir", default=".runtime")
     task_list_cmd = sub.add_parser("task-list", help="列出交付任务")
     task_list_cmd.add_argument("--runtime-dir", default=".runtime"); task_list_cmd.add_argument("--limit", type=int, default=30)
+    migrate_cmd = sub.add_parser('restore-workbench-migration', help='停服迁移证据到新空目录，保留原始引用和哈希')
+    migrate_cmd.add_argument('path'); migrate_cmd.add_argument('--runtime-dir', required=True); migrate_cmd.add_argument('--mapping-file', required=True)
+    migrate_check = sub.add_parser('verify-workbench-migration', help='复验迁移后的外部源码、Git和解释器，不重放任务')
+    migrate_check.add_argument('--runtime-dir', required=True)
     args = parser.parse_args()
     return dispatch(args, parser)
 
@@ -217,6 +223,21 @@ def dispatch(args, parser=None) -> int:
 
 
 def _dispatch(args, parser) -> int:
+    if args.command in {'restore-workbench-migration', 'verify-workbench-migration'}:
+        from .migration import restore_migration, validate_migration_environment
+        from .runtime_lease import WorkbenchRuntimeLease
+        try:
+            if args.command == 'restore-workbench-migration':
+                mapping = json.loads(Path(args.mapping_file).read_text(encoding='utf-8'))
+                result = restore_migration(args.path, args.runtime_dir, mapping)
+            else:
+                with WorkbenchRuntimeLease(args.runtime_dir):
+                    result = validate_migration_environment(args.runtime_dir)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0 if result.get('ok', result.get('status') == 'ready') else 1
+        except (OSError, ValueError, RuntimeError) as error:
+            print('工作台迁移未完成：' + str(error), file=sys.stderr)
+            return 2
     if args.command in {'workbench-backup', 'verify-workbench-backup', 'restore-workbench-backup'}:
         from .workbench_backup import BackupService, verify_backup, restore_backup
         from .runtime_lease import WorkbenchRuntimeLease, WorkbenchRuntimeInUse
@@ -375,7 +396,7 @@ def _dispatch(args, parser) -> int:
 
         try:
             serve_workbench(args.host, args.port, args.runtime_dir, enable_code_execution=args.enable_code_execution,
-                            erp_url=args.erp_url)
+                            erp_url=args.erp_url, enable_advanced_runtime=args.enable_advanced_runtime)
         except ServerBindError as error:
             return report_bind_error(error)
         except WorkbenchRuntimeInUse as error:
@@ -384,7 +405,8 @@ def _dispatch(args, parser) -> int:
         return 0
     if args.command == "harness-serve":
         try:
-            serve_harness(args.host, args.port, args.runtime_dir, args.repository_root, args.bootstrap)
+            serve_harness(args.host, args.port, args.runtime_dir, args.repository_root, args.bootstrap,
+                          upstream_url=args.workbench_url)
         except ServerBindError as error:
             return report_bind_error(error)
         return 0

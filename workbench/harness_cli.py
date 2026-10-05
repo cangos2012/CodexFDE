@@ -459,6 +459,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve_cmd = sub.add_parser("serve-web", help="可选：启动 legacy Web 面板（8010）")
     serve_cmd.add_argument("--host", default="127.0.0.1")
     serve_cmd.add_argument("--port", type=int, default=8010)
+    serve_cmd.add_argument('--workbench-url', default='http://127.0.0.1:8001')
     serve_cmd.add_argument("--bootstrap", action="store_true")
     serve_cmd.add_argument("--boot", action="store_true",
                            help="组合启动：注册当前项目并联动启动 FlowERP")
@@ -495,6 +496,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.flowerp_host,
                 args.flowerp_port,
                 args.flowerp_runtime_dir,
+                upstream_url=args.workbench_url,
             )
         except ServerBindError as error:
             return report_bind_error(error)

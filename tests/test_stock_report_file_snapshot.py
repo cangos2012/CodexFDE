@@ -6,10 +6,13 @@ import io
 import json
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
 from workbench import file_io
+
+REAL_SLEEP = time.sleep
 
 
 SOURCE = Path(__file__).resolve().parents[1] / 'docs/courses/L06/examples/stock_practice.py'
@@ -75,7 +78,7 @@ class StockReportSnapshotTests(unittest.TestCase):
                 raise PermissionError('temporary report sharing lock')
             return original(target, mode, *args, **kwargs)
 
-        with patch.object(file_io, '_WINDOWS', True), patch.object(file_io.time, 'sleep'), \
+        with patch.object(file_io, '_WINDOWS', True), patch.object(file_io.time, 'sleep', wraps=REAL_SLEEP), \
                 patch.object(Path, 'open', locked_and_changed), patch.object(stock, 'verify'):
             with self.assertRaisesRegex(ValueError, 'Candidate or report changed'):
                 stock.review(self.session, self.report_path)

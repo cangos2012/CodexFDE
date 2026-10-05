@@ -54,7 +54,9 @@ def report_view(report, workspace, runtime):
         try:
             current = fingerprint(manifest(workspace, runtime))
             path = Path(runtime) / report['report_path'] if report.get('report_path') else Path(runner['report_path'])
-            valid_file = hashlib.sha256(read_bytes(path)).hexdigest() == report.get('report_sha256')
+            from .reference_paths import reference_mapping_scope, load_reference_mappings
+            with reference_mapping_scope(runtime, load_reference_mappings(runtime)):
+                valid_file = hashlib.sha256(read_bytes(path)).hexdigest() == report.get('report_sha256')
             view['freshness'] = 'current' if current == runner['candidate_sha256'] and valid_file else 'stale'
         except (OSError, ValueError, KeyError):
             view['freshness'] = 'unavailable'

@@ -4,10 +4,13 @@ import io
 import json
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from unittest.mock import Mock, patch
 
 from workbench import file_io, quality_hook
+
+REAL_SLEEP = time.sleep
 
 
 class HookBindingSnapshotTests(unittest.TestCase):
@@ -66,7 +69,7 @@ class HookBindingSnapshotTests(unittest.TestCase):
             return original(target, mode, *args, **kwargs)
 
         output = io.StringIO()
-        with patch.object(file_io, '_WINDOWS', True), patch.object(file_io.time, 'sleep'), \
+        with patch.object(file_io, '_WINDOWS', True), patch.object(file_io.time, 'sleep', wraps=REAL_SLEEP), \
                 patch.object(Path, 'open', locked_and_changed), \
                 patch('workbench.project_delivery.CandidateProjectEval') as runner, \
                 patch('sys.stdin', self.event()), patch('sys.stdout', output):

@@ -78,18 +78,17 @@ sys.exit(1 if failed else 0)
             submit_daily(self.root, self.runtime, self.tasks, plan, lambda _: None)
         self.assertEqual([], self.tasks.list())
 
-    def test_daily_plan_is_persistent_and_requires_execution_enabled(self):
+    def test_daily_compatibility_requires_execution_enabled_and_a_confirmed_initiative(self):
         service = WebExecution(self.root, self.runtime, self.tasks)
         with self.assertRaisesRegex(ValueError, '未开启'):
             service.prepare_daily('operator', '需求', '验收', ['workbench'])
         service.enabled = True
-        with patch.object(CodexExecutionRunner, 'capabilities', return_value={'codex_available': True}):
-            plan = service.prepare_daily('operator', '需求', '验收', ['workbench'])
-        self.assertEqual('daily', plan['kind'])
-        self.assertNotIn('lesson', plan)
-        self.assertNotIn('confirmation', service.get(plan['plan_id']))
-        restarted = WebExecution(self.root, self.runtime, self.tasks, enabled=True)
-        self.assertEqual('failed', restarted.get(plan['plan_id'])['state'])
+        with patch.object(CodexExecutionRunner, 'capabilities') as capability:
+            with self.assertRaisesRegex(ValueError, '事项'):
+                service.prepare_daily('operator', '需求', '验收', ['workbench'])
+            capability.assert_not_called()
+        self.assertEqual({}, service.plans)
+        self.assertEqual([], self.tasks.list())
 
     def test_scope_and_spec_injection_are_rejected(self):
         for scope in (['../workbench'], ['.env'], ['private'], 'flowerp'):

@@ -43,6 +43,8 @@ def _summarize(result: dict) -> dict:
 def _approval_allowed(spec: ToolSpec, context: dict) -> tuple[bool, str]:
     if spec.approval != "ask":
         return True, "not_required"
+    if spec.id in set(context.get('task_authorized_tools') or []):
+        return True, 'frozen_task_scope'
     if context.get("auto_approve"):
         return True, "auto_approve"
     approved = set(context.get("approved_tools") or [])
@@ -168,7 +170,11 @@ class ToolRegistry:
             )
             raise PermissionError(f"Tool {tool_id} 缺少权限：{', '.join(sorted(missing))}")
 
-        approved, approval_reason = _approval_allowed(spec, context)
+        gate = context.get('approval_gate')
+        if spec.approval == 'ask' and callable(gate) and spec.id not in set(context.get('task_authorized_tools') or []):
+            approved, approval_reason = gate(context, spec, args, call_id, actor)
+        else:
+            approved, approval_reason = _approval_allowed(spec, context)
         if not approved:
             self.runtime.append(
                 session_id,

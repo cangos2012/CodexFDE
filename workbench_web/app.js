@@ -10,6 +10,44 @@ let webCodeAvailable = false;
 let composerMode = 'verify';
 let selectedInitiativeBinding = null;
 let deliveryPanel = 'summary';
+let workbenchServiceIdentity = null;
+let workbenchServiceFrozen = false;
+let workbenchFreezeObserver = null;
+const workbenchWriteButtons = ['save-initiative','decide-initiative','v0-submit','iw-discuss','iw-recheck','iw-defer-people',
+  'iw-confirm-prd','iw-confirm','iw-execute','iw-accept','iw-integrate','iw-cancel','iw-release','iw-outcome','iw-reopen',
+  'iw-eval-run','iw-loop-save','iw-ci-record','iw-hook-prepare','iw-learning-create','iw-learning-decide','iw-learning-generate',
+  'iw-learning-cancel-generation','iw-learning-recall','iw-learning-trial','iw-runtime-profile-save','iw-runtime-pause',
+  'iw-runtime-resume','iw-runtime-cancel','iw-subtask-prepare','iw-subtask-start','iw-deployment-prepare','iw-deployment-start',
+  'iw-deployment-verify','iw-rollback-confirm','preview-plan-start','action-approve','action-reject','action-verify',
+  'task-submit','authorize-code','prepare-code','prepare-preview','project-register','plan-save','migration-prepare','backup-create'];
+function workbenchWritesFrozen(){return workbenchServiceFrozen;}
+function applyWorkbenchServiceFreeze() {
+  for(const id of workbenchWriteButtons){const button=document.getElementById(id);if(button && !button.disabled)button.disabled=true;}
+  document.querySelectorAll('#iw-learning-assets button,#iw-runtime-approvals button,#backup-list button,[data-service-write]').forEach(button=>{if(!button.disabled)button.disabled=true;});
+}
+function freezeWorkbenchService(message) {
+  if(!workbenchServiceFrozen && typeof WorkbenchDrafts!=='undefined')WorkbenchDrafts.flush();
+  workbenchServiceFrozen=true;executionPlan=null;
+  const text=message+'。关键操作已冻结，未提交草稿保留。请重新载入页面并核对服务、运行目录与当前事项；不会自动采用新的服务身份。';
+  const banner=document.getElementById('service-identity-status');if(banner){banner.hidden=false;banner.textContent=text;}
+  show('data-status',text);
+  if(typeof invalidateInitiativeWork==='function')invalidateInitiativeWork(text);
+  if(typeof projectPlanState!=='undefined')projectPlanState.readable=false;
+  if(typeof migrationState!=='undefined')migrationState.plan=null;
+  applyWorkbenchServiceFreeze();
+  if(typeof MutationObserver==='function' && document.body && !workbenchFreezeObserver) {
+    workbenchFreezeObserver=new MutationObserver(applyWorkbenchServiceFreeze);
+    workbenchFreezeObserver.observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['disabled']});
+  }
+}
+function checkWorkbenchService(response) {
+  if(typeof response.headers?.get!=='function')return;
+  const service=response.headers.get('X-Workbench-Service-Instance'),runtime=response.headers.get('X-Workbench-Runtime-Instance');
+  if(!service || !runtime || workbenchServiceIdentity && (service!==workbenchServiceIdentity.service || runtime!==workbenchServiceIdentity.runtime)) {
+    freezeWorkbenchService('工作台服务实例或运行数据库身份缺失或变化，当前证据身份无法继续核对');throw new Error('工作台服务身份变化或缺失；请重新载入核对');
+  }
+  if(!workbenchServiceIdentity){workbenchServiceIdentity={service,runtime};if(typeof WorkbenchMutationJournal!=='undefined')WorkbenchMutationJournal.init(runtime);}
+}
 function selectDeliveryPanel(panel) {
   deliveryPanel = panel === 'evidence' ? 'evidence' : 'summary';
   document.getElementById('delivery-digest').hidden = deliveryPanel !== 'summary';
@@ -116,7 +154,7 @@ async function prepareCode() {
     document.getElementById('code-plan').hidden = false;
     document.getElementById('task-form').hidden = true;
     document.getElementById('code-options').hidden = true;
-    document.getElementById('authorize-code').disabled = false;
+    document.getElementById('authorize-code').disabled = workbenchWritesFrozen();
     show('code-status', '尚未执行。确认上面的具体任务后再授权。');
   } catch (error) { show('code-status', String(error.message || error)); }
 }
@@ -134,7 +172,7 @@ async function authorizeCode() {
     await followExecutionPlan(plan.plan_id);
   } catch (error) {
     show('code-status', '请核对或重试同一方案：' + String(error.message || error));
-    document.getElementById('authorize-code').disabled = false;
+    document.getElementById('authorize-code').disabled = workbenchWritesFrozen();
   }
 }
 
@@ -165,7 +203,7 @@ async function followExecutionPlan(planId) {
     setTimeout(function(){ followExecutionPlan(planId).catch(function(error){
       show('code-status', '进度读取失败，请重试同一方案：' + error.message);
       show('execution-recovery-status', '进度暂时不可读，请再次查看原记录：' + error.message);
-      document.getElementById('authorize-code').disabled = false;
+      document.getElementById('authorize-code').disabled = workbenchWritesFrozen();
     }); }, 2000);
   }
 }
@@ -266,17 +304,36 @@ function renderWorkflowGraph(graph) {
 }
 
 async function api(path, options) {
+  if(workbenchServiceFrozen)throw new Error('工作台服务身份已变化，操作保持冻结；请重新载入核对');
   const read = !options || !options.method || options.method.toUpperCase() === "GET";
-  const controller = read ? new AbortController() : null;
-  const timer = controller ? setTimeout(function () { controller.abort(); }, 10000) : null;
+  const controller = new AbortController();
+  const timeoutMs = read ? 10000 : path==='/api/v1/projects' || /\/execution\/(?:daily-)?plans$/.test(path) ? 120000 : 30000;
+  const timeoutError = new Error(read ? '读取超时，当前状态尚未确认；请重新读取原记录。' : '提交超时，结果尚未确认；请读取原事项或原方案核对，不要重复授权。');
+  timeoutError.code='request_timeout';timeoutError.uncertain=!read;
+  let timedOut=false,timer;
+  const deadline=new Promise((_,reject)=>{timer=setTimeout(()=>{timedOut=true;reject(timeoutError);controller.abort();},timeoutMs);});
   try {
-    const response = await fetch(path, Object.assign({ cache: "no-store" },
-      controller ? { signal: controller.signal } : {}, options));
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.message || body.error || path);
-    return body;
+    const request=Object.assign({ cache: "no-store" },options,{signal:controller.signal});
+    if(workbenchServiceIdentity) {
+      const headers=typeof Headers==='function' ? new Headers(request.headers || {}) : {...request.headers};
+      if(typeof headers.set==='function'){headers.set('X-Workbench-Expected-Service-Instance',workbenchServiceIdentity.service);headers.set('X-Workbench-Expected-Runtime-Instance',workbenchServiceIdentity.runtime);}
+      else Object.assign(headers,{'X-Workbench-Expected-Service-Instance':workbenchServiceIdentity.service,'X-Workbench-Expected-Runtime-Instance':workbenchServiceIdentity.runtime});
+      request.headers=headers;
+    }
+    const operation=(async()=>{
+      const response = await fetch(path, request);
+      if(timedOut)throw timeoutError;
+      checkWorkbenchService(response);
+      const body = await response.json();
+      if(timedOut)throw timeoutError;
+      if(workbenchServiceFrozen)throw new Error('工作台服务身份已变化，操作保持冻结；请重新载入核对');
+      if(body?.error==='instance_changed'){freezeWorkbenchService(body.message || '工作台服务实例已变化');throw new Error(body.message || '服务身份不一致');}
+      if (!response.ok) throw new Error(body.message || body.error || path);
+      return body;
+    })();
+    return await Promise.race([operation,deadline]);
   } finally {
-    if (timer !== null) clearTimeout(timer);
+    clearTimeout(timer);
   }
 }
 
@@ -433,31 +490,14 @@ function renderActions(detail) {
     verify.hidden = true;
     if (!(detail.events || []).some(function(event){return event.detail === '课程红绿差分判定已完成' && event.evidence && event.evidence.accepted === true;})) approve.hidden = true;
   }
-  [verify, approve, reject].forEach(function (button) { button.disabled = false; });
+  [verify, approve, reject].forEach(function (button) { button.disabled = workbenchWritesFrozen(); });
   verify.onclick = function () { runVerify(detail.task_id); };
   approve.onclick = function () { runReview(detail.task_id, "approve"); };
   reject.onclick = function () { runReview(detail.task_id, "reject"); };
 }
 
 async function preparePreview(taskId) {
-  const button = document.getElementById('prepare-preview');
-  button.disabled = true;
-  show('preview-status', '正在准备独立预览，必要时会等待上次运行释放数据，请稍候。');
-  try {
-    const result = await api('/api/v1/tasks/' + encodeURIComponent(taskId) + '/preview', {
-      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({actor:actorName()})
-    });
-    if (selectedTask !== taskId) return;
-    if (result.task_id !== taskId || !/^http:\/\/127\.0\.0\.1:\d+$/.test(result.url)) throw new Error('预览地址或任务编号不匹配');
-    const link = document.getElementById('preview-link');
-    link.href = result.url;
-    link.hidden = false;
-    show('preview-status', result.label + '。' + result.notice);
-  } catch(error) {
-    if (selectedTask === taskId) show('preview-status', '暂未打开预览：' + error.message);
-  } finally {
-    if (selectedTask === taskId) button.disabled = false;
-  }
+  return openPlatformPreview(taskId,'task');
 }
 
 function renderEvidence(detail) {
@@ -498,7 +538,7 @@ function renderEvidence(detail) {
     (detail.events || []).some(event=>event.detail === '课程红绿差分判定已完成' && event.evidence && event.evidence.accepted === true);
   document.getElementById('candidate-preview').hidden = !canPreview;
   document.getElementById('preview-link').hidden = true;
-  document.getElementById('prepare-preview').disabled = false;
+  document.getElementById('prepare-preview').disabled = workbenchWritesFrozen();
   document.getElementById('prepare-preview').onclick = function(){ preparePreview(detail.task_id); };
   show('preview-status', '');
   const stopped = ['failed', 'dead_letter'].includes((detail.status || {}).code);
@@ -693,7 +733,7 @@ async function submitTask(event) {
   } catch (error) {
     show("task-submit-status", "未确认受理结果：" + String(error.message || error) + "。重试同一内容会复用本次提交编号。");
   } finally {
-    button.disabled = false;
+    button.disabled = workbenchWritesFrozen();
   }
 }
 
@@ -712,7 +752,7 @@ async function runVerify(taskId) {
   } catch (error) {
     show("action-status", "复验失败：" + String(error.message || error));
   } finally {
-    button.disabled = false;
+    button.disabled = workbenchWritesFrozen();
   }
 }
 
@@ -809,9 +849,10 @@ async function boot() {
   };
   try {
     const health = await api("/api/health");
+    if(health.surface!=="workbench")throw new Error('当前端口不是本仓库工作台，请核对服务身份与启动端口');
     if(typeof WorkbenchDrafts!=='undefined') {
       WorkbenchDrafts.init(health.runtime_instance || health.runtime);
-      document.getElementById('clear-local-drafts').onclick=()=>WorkbenchDrafts.clearAll();
+      document.getElementById('clear-local-drafts').onclick=()=>{WorkbenchDrafts.clearAll();if(typeof WorkbenchMutationJournal!=='undefined')WorkbenchMutationJournal.clear();};
       if(typeof trackInitiativeDraft==='function')trackInitiativeDraft(currentInitiative);
     }
     if(typeof initWorkbenchBackups==='function')initWorkbenchBackups();

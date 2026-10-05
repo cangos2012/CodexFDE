@@ -114,6 +114,8 @@ class WorkbenchRestoreStartupTests(unittest.TestCase):
     def test_restore_marker_prevents_automatic_recovery_but_allows_new_explicit_work(self):
         with tempfile.TemporaryDirectory() as directory:
             runtime = Path(directory) / 'runtime'; runtime.mkdir()
+            from workbench.task_store import TaskStore
+            TaskStore(runtime / 'workbench.db')  # A completed restore includes its database.
             (runtime / RESTORE_MARKER).write_text('{}', encoding='utf-8')
             with patch('workbench.workbench_server.create_http_server') as server, patch.object(DeliveryAutomation, 'recover') as recover:
                 serve(port=8098, runtime_dir=runtime, enable_code_execution=True)
@@ -137,4 +139,36 @@ class WorkbenchRestoreStartupTests(unittest.TestCase):
             first = WorkbenchApp(runtime).health()['runtime_instance']
             self.assertEqual(first, WorkbenchApp(runtime).health()['runtime_instance'])
             (runtime / 'workbench.db').unlink()
+            with self.assertRaisesRegex(ValueError, '缺少原数据库'):
+                WorkbenchApp(runtime)
+            self.assertFalse((runtime / 'workbench.db').exists())
+            # Replacing the database is explicit; ordinary startup never does it.
+            from workbench.task_store import TaskStore
+            TaskStore(runtime / 'workbench.db')
             self.assertNotEqual(first, WorkbenchApp(runtime).health()['runtime_instance'])
+
+    def test_restart_missing_database_preserves_retained_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            WorkbenchApp(runtime)
+            database = runtime / 'workbench.db'
+            retained = runtime / 'workbench-retained.db'
+            database.rename(retained)
+            original = retained.read_bytes()
+            with self.assertRaisesRegex(ValueError, '缺少原数据库'):
+                WorkbenchApp(runtime)
+            self.assertFalse(database.exists())
+            self.assertEqual(original, retained.read_bytes())
+            retained.rename(database)
+            self.assertTrue(WorkbenchApp(runtime).health()['ready'])
+
+    def test_restore_or_journal_without_database_cannot_bootstrap_empty_history(self):
+        for name in (RESTORE_MARKER, 'workbench.db-wal', 'workbench.db-shm', 'workbench.db-journal'):
+            with self.subTest(marker=name), tempfile.TemporaryDirectory() as directory:
+                runtime = Path(directory)
+                marker = runtime / name
+                marker.write_bytes(b'preserved fixture evidence')
+                with self.assertRaisesRegex(ValueError, '缺少原数据库'):
+                    WorkbenchApp(runtime)
+                self.assertEqual(b'preserved fixture evidence', marker.read_bytes())
+                self.assertFalse((runtime / 'workbench.db').exists())

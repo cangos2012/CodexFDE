@@ -48,7 +48,7 @@ async function setHomeCleared(row, button, notice) {
     homeClearNotices.delete(row.item.id);
     await refreshProjectHome();
   } catch(error) {report('清除或恢复未完成：'+error.message);}
-  finally {button.disabled=false;}
+  finally {button.disabled=typeof workbenchWritesFrozen==='function' && workbenchWritesFrozen();}
 }
 async function openProjectInitiative(id) {
   if(initiativeDirty) { show('home-status','请先保存当前事项的修改，再切换。');return; }
@@ -78,12 +78,15 @@ function renderProjectHome() {
     const meta=uiElement('div','card-meta');meta.append(uiElement('span','',work?.project?.name || '项目'),uiElement('span','state-badge '+view.group,view.label));
     if(isDemoInitiative(item))meta.append(uiElement('span','demo-badge','课程演示'));
     card.append(meta,uiElement('h3','',item.title),uiElement('p','card-goal',work?.proposal?.goal || item.goal || item.raw_signal));
+    const dependencies=work?.project_plan || work?.dependencies;
+    if(dependencies)card.append(uiElement('p','platform-warning',typeof dependencies==='string' ? dependencies : '项目依赖：'+JSON.stringify(dependencies)));
     const next=uiElement('div','card-next');next.append(uiElement('span','',view.title));
     const button=uiElement('button','text-button',view.group==='running'?'查看进展 →':'继续这项交付 →');
     button.onclick=()=>openProjectInitiative(item.id);next.append(button);card.append(next);list.append(card);
     const clear=uiElement('button','text-button',item.home_hidden?'恢复到首页':'清除');
+    clear.dataset.serviceWrite='true';
     clear.title='从首页移出，可恢复；交付记录和失败证据保留。';
-    clear.disabled=view.group==='running' || view.group==='unknown';
+    clear.disabled=view.group==='running' || view.group==='unknown' || typeof workbenchWritesFrozen==='function' && workbenchWritesFrozen();
     if(clear.disabled)clear.title='请等待运行结束并刷新状态后再清除。';
     const notice=uiElement('p','hint',homeClearNotices.get(item.id) || '');
     notice.setAttribute('role','status');notice.setAttribute('aria-live','polite');
@@ -133,6 +136,7 @@ async function refreshProjectHome(reset=false) {
     if(select.value!==selected && selected!=='all')return refreshProjectHome(true);
     const unique=new Map();for(const row of items)if(!unique.has(row.item.id))unique.set(row.item.id,row);
     homeSummary=body;homeRows=[...unique.values()].map(row=>({...row,view:deliveryStageView(row.work.stage)}));renderProjectHome();
+    if(typeof refreshPlatformProjectPlan==='function')void refreshPlatformProjectPlan();
   } catch(error) {
     if(version!==homeRead)return;
     show('home-status','暂时无法读取项目交付：'+error.message);['attention','running','outcome'].forEach(k=>show('home-'+k,'—'));

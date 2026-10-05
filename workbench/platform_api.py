@@ -31,6 +31,7 @@ from .session_context import derive_messages
 from .session_export import export_session_bundle
 from .session_graph import session_delivery_graph
 from .tools import register_default_tools
+from .mutation_receipts import MutationReceipts, MutationPending
 
 
 @dataclass
@@ -44,19 +45,24 @@ class HarnessPlatformAPI:
     """Standalone, project-neutral API for the personal delivery Harness."""
 
     def __init__(self, runtime_dir: str | Path = ".harness-runtime",
-                 repository_root: str | Path | None = None) -> None:
+                 repository_root: str | Path | None = None, *, tasks=None, projects=None,
+                 runtime_store=None, initiatives=None, delivery_runtime=None) -> None:
         self.runtime_dir = Path(runtime_dir).resolve()
         self.repository_root = Path(repository_root or Path.cwd()).resolve()
-        self.projects = ProjectStore(self.runtime_dir / "platform.db")
-        self.runtime = HarnessRuntimeStore(self.runtime_dir / "platform.db")
-        self.tasks = TaskStore(self.runtime_dir / "tasks.db")
-        self.initiatives = InitiativeStore(self.runtime_dir / "platform.db")
+        self.projects = projects or ProjectStore(self.runtime_dir / "platform.db")
+        self.runtime = runtime_store or HarnessRuntimeStore(self.runtime_dir / "platform.db")
+        self.tasks = tasks or TaskStore(self.runtime_dir / "tasks.db")
+        self.initiatives = initiatives or InitiativeStore(self.runtime_dir / "platform.db")
+        self.delivery_runtime = delivery_runtime
+        self.mutations = MutationReceipts(self.tasks) if delivery_runtime else None
         self._initiative_promotion_lock = threading.Lock()
         self.evolutions = EvolutionStore(self.tasks.path)
         self.delivery_views = DeliveryViewService(self.tasks, self.evolutions)
         self.providers = HarnessProviders(self.runtime, self.projects, self.runtime_dir, self.repository_root)
         self.tools = ToolRegistry(self.runtime)
         register_default_tools(self.tools, self.tasks, self.providers)
+        if self.delivery_runtime is not None:
+            self.delivery_runtime.tool_executor = self._invoke_runtime_tool
         self.plugin_supervisor = PluginSupervisor(
             self.providers.plugin_contracts(self.tools),
             event_sink=self.runtime.record_plugin_event,
@@ -72,13 +78,16 @@ class HarnessPlatformAPI:
         self.runtime.set_profile_change_handler(self.plugin_supervisor.reconcile)
         self.runtime.set_runtime_status_handler(self.plugin_supervisor.status)
         self.agent_loop = AgentLoop(self.tools, self.runtime, self.tasks, self.providers, AgentLoopConfig())
-        self.automation = DeliveryAutomation(
-            self.tasks, self.runtime_dir,
-            suite_runner=self.providers._eval_runner,
-            execution_runner=ProjectExecutionRunner(self.projects, self.runtime_dir),
-            agent_runner=self._run_agent_loop,
-        )
-        self.automation.recover()
+        self.automation = None
+        if self.delivery_runtime is None:
+            self.automation = DeliveryAutomation(
+                self.tasks, self.runtime_dir,
+                suite_runner=self.providers._eval_runner,
+                execution_runner=ProjectExecutionRunner(self.projects, self.runtime_dir),
+                agent_runner=self._run_agent_loop,
+            )
+        # Recovery belongs to the caller holding the service lease. Constructing
+        # an API must never start an old code task.
         self._install_persist_hook()
 
     def shutdown(self) -> None:
@@ -98,6 +107,8 @@ class HarnessPlatformAPI:
 
         self.runtime.set_after_append(after_append)
     def _run_agent_loop(self, task_id: str, actor: str) -> dict:
+        if self.delivery_runtime:
+            raise ValueError('共享工作台运行须经事项冻结方案授权；不能从旧 AgentLoop 另起执行')
         session = self.runtime.session_for_task(task_id)
         if not session:
             from .workflow import run_task
@@ -109,12 +120,105 @@ class HarnessPlatformAPI:
             )
         return self.agent_loop.run(session["id"], task_id, actor)
 
+    def _invoke_runtime_tool(self, initiative_id, payload, actor):
+        from .delivery_runtime import CandidateProjectRegistry, RuntimeShellProvider
+        task = self.tasks.get(payload['task_id'])
+        binding = self.delivery_runtime.task_context(task['id'])
+        if binding['initiative_id'] != initiative_id:
+            raise ValueError('授权调用事项不一致')
+        run = self.delivery_runtime.view(initiative_id)
+        context = {'task': task, 'initiative_id': initiative_id, 'session_id': run['session_id'],
+                   'profile_id': run['profile_id'], 'actor': actor,
+                   'projects': CandidateProjectRegistry(self.projects, task, binding['workspace']),
+                   'repository_root': binding['workspace'], 'fs': self.providers.fs_provider(run['profile_id']),
+                   'shell': self.providers.shell_provider(run['profile_id']),
+                   'mcp': self.providers.mcp_provider(run['profile_id']),
+                   'allowed_actions': self._task_allowed_actions(task), 'auto_approve': False,
+                   'approval_gate': self.delivery_runtime.authorize_tool}
+        from .shell_provider import LocalShellProvider
+        if isinstance(context['shell'], LocalShellProvider):
+            context['shell'] = RuntimeShellProvider(self.delivery_runtime.events.setdefault(initiative_id, threading.Event()))
+        if payload['tool_id'].startswith('mcp.'):
+            context['allowed_actions'].append('call_mcp')
+        return self.tools.invoke(payload['tool_id'], context, payload['args'],
+                                 session_id=run['session_id'], actor=actor, call_id=payload['call_id'])
+
+    def _idempotent(self, operation, key, payload, producer):
+        if self.mutations:
+            return self.mutations.run('harness:' + operation, key, payload, producer)
+        return self.projects.idempotent(operation, key, payload, producer)
+
+    def _configuration_sha256(self):
+        from .delivery_runtime import _digest
+        return _digest({'profiles': self.runtime.profiles(), 'plugins': self.runtime.plugins()})
+
+    def _configure(self, data, producer):
+        if not self.delivery_runtime:
+            return producer()
+        with self.delivery_runtime.lock:
+            if data.get('expected_configuration_sha256') != self._configuration_sha256():
+                raise ValueError('Harness配置版本已变化或未核对，请重新读取configuration_sha256')
+            if self.delivery_runtime.busy():
+                raise ValueError('仍有活动运行或工具调用，请结束后再调整Profile或插件')
+            return producer()
+
+    def _session_status(self, session_id, data, actor):
+        if not self.delivery_runtime:
+            return self.runtime.set_status(session_id, str(data.get('status', '')), actor)
+        session = self.runtime.get_session(session_id)
+        binding = self.delivery_runtime.task_context(session.get('task_id'))
+        run = self.delivery_runtime.view(binding['initiative_id'])
+        if run['session_id'] != session_id:
+            raise ValueError('旧Session不能控制当前事项运行，请读取当前Session与运行版本')
+        action = {'paused': 'pause', 'closed': 'cancel', 'active': 'resume'}.get(data.get('status'))
+        if not action:
+            raise ValueError('Session状态必须是active、paused或closed')
+        view = self.delivery_runtime.control(binding['initiative_id'], action, actor,
+                    data.get('expected_revision'), data.get('candidate_sha256', ''))
+        return {**self.runtime.get_session(session_id), 'runtime': view}
+
+    def _shared_tool(self, session_id, task_id, tool_id, context, data, actor, call_id):
+        if not self.delivery_runtime:
+            return self.tools.invoke(tool_id, context, dict(data.get('args') or {}),
+                                     session_id=session_id, actor=actor, call_id=call_id)
+        with self.delivery_runtime.lock:
+            binding = self.delivery_runtime.task_context(task_id)
+            run = self.delivery_runtime._load(binding['initiative_id'])
+            if run['revision'] != data.get('expected_revision'):
+                raise ValueError('工具请求缺少当前运行版本，或运行已变化，请刷新后重试')
+            if run['session_id'] != session_id or context['profile_id'] != run['profile_id']:
+                raise ValueError('工具请求的Session、任务或Profile与当前运行不一致')
+            from .delivery_runtime import _profile_fingerprint
+            if _profile_fingerprint(self.runtime.composition(run['profile_id'])) != run.get('profile_sha256'):
+                raise ValueError('冻结Profile已变化，请重新确认运行后再调用工具')
+            if data.get('initiative_id') and data['initiative_id'] != binding['initiative_id']:
+                raise ValueError('工具调用与事项绑定不一致')
+            if tool_id in {'codex.exec', 'eval.blocking'}:
+                raise ValueError('编码与项目Eval由同一事项运行推进；请使用事项执行或复验入口')
+            context.update(initiative_id=binding['initiative_id'], approval_gate=self.delivery_runtime.authorize_tool,
+                           repository_root=binding['workspace'])
+            if binding.get('workspace'):
+                from .delivery_runtime import CandidateProjectRegistry
+                context['projects'] = CandidateProjectRegistry(self.projects, context['task'], binding['workspace'])
+            if tool_id.startswith('mcp.'):
+                context['allowed_actions'].append('call_mcp')
+            return self.tools.invoke(tool_id, context, dict(data.get('args') or {}),
+                                     session_id=session_id, actor=actor, call_id=call_id)
+
     def dispatch(self, method: str, raw_path: str, headers: dict[str, str], body: object) -> PlatformResponse:
+        headers = {k.lower(): v for k, v in headers.items()}
         path, _, query_string = raw_path.partition("?")
         path = path.rstrip("/") or "/"
         query = {key: values[-1] for key, values in parse_qs(query_string).items()}
         data = body if isinstance(body, dict) else {}
         try:
+            if method == 'POST' and self.delivery_runtime:
+                if data.get('actor') and headers.get('x-workbench-actor') and data['actor'] != headers['x-workbench-actor']:
+                    raise ValueError('请求署名与X-Workbench-Actor不一致')
+                headers.setdefault('x-workbench-actor', str(data.get('actor') or ''))
+                headers.setdefault('idempotency-key', str(data.get('submission_key') or ''))
+                actor, _ = self._write_identity(headers)
+                data = {**data, 'actor': assert_boss_actor(actor)}
             if path == "/api/v1/health" and method == "GET":
                 return PlatformResponse(200, {
                     "status": "ok", "product": "Harness Workbench",
@@ -170,13 +274,13 @@ class HarnessPlatformAPI:
                     "permissions": sorted(spec.permissions),
                 })
             if path == "/api/v1/plugins" and method == "GET":
-                return PlatformResponse(200, {"items": self.runtime.plugins()})
+                return PlatformResponse(200, {"items": self.runtime.plugins(), 'configuration_sha256': self._configuration_sha256()})
             if path == "/api/v1/plugin-events" and method == "GET":
                 return PlatformResponse(200, {"items": self.runtime.plugin_events(
                     query.get("profile_id"), int(query.get("limit", "100")),
                 )})
             if path == "/api/v1/profiles" and method == "GET":
-                return PlatformResponse(200, {"items": self.runtime.profiles()})
+                return PlatformResponse(200, {"items": self.runtime.profiles(), 'configuration_sha256': self._configuration_sha256()})
             if path.startswith("/api/v1/profiles/") and path.endswith("/runtime") and method == "GET":
                 return PlatformResponse(200, self.plugin_supervisor.status(path.split("/")[4]))
             if path.startswith("/api/v1/profiles/") and path.endswith("/composition") and method == "GET":
@@ -187,19 +291,21 @@ class HarnessPlatformAPI:
                 actor, key = self._write_identity(headers)
                 plugin_id = str(data.get("plugin_id", ""))
                 payload = {**data, "profile_id": profile_id, "plugin_id": plugin_id, "actor": actor}
-                result = self.projects.idempotent(
+                result = self._idempotent(
                     "profile-activate", key, payload,
-                    lambda: self.runtime.activate_plugin(profile_id, plugin_id),
+                    lambda: self._configure(data, lambda: self.runtime.activate_plugin(profile_id, plugin_id)),
                 )
                 return PlatformResponse(200, result)
             if path.startswith("/api/v1/plugins/") and path.endswith("/enabled") and method == "POST":
                 plugin_id = path.split("/")[4]
                 actor, key = self._write_identity(headers)
+                if self.delivery_runtime and type(data.get('enabled')) is not bool:
+                    raise ValueError('enabled必须是JSON布尔值')
                 enabled = bool(data.get("enabled", True))
                 payload = {**data, "plugin_id": plugin_id, "actor": actor}
-                result = self.projects.idempotent(
+                result = self._idempotent(
                     "plugin-enabled", key, payload,
-                    lambda: self.runtime.set_plugin_enabled(plugin_id, enabled),
+                    lambda: self._configure(data, lambda: self.runtime.set_plugin_enabled(plugin_id, enabled)),
                 )
                 return PlatformResponse(200, result)
             if path == "/api/v1/sessions":
@@ -207,7 +313,7 @@ class HarnessPlatformAPI:
                 if method == "POST":
                     actor, key = self._write_identity(headers)
                     self.projects.get(str(data.get("project_id", "")))
-                    result = self.projects.idempotent("session-create", key, data, lambda: self.runtime.create_session(
+                    result = self._idempotent("session-create", key, data, lambda: self.runtime.create_session(
                         str(data.get("project_id", "")), str(data.get("title", "")), actor,
                         str(data.get("profile_id", "PROFILE-DEFAULT")),
                     ))
@@ -248,46 +354,50 @@ class HarnessPlatformAPI:
                 actor, key = self._write_identity(headers)
                 payload = {**data, "session_id": session_id, "actor": actor}
                 if len(parts) == 6 and parts[5] == "fork":
-                    result = self.projects.idempotent(
+                    result = self._idempotent(
                         "session-fork", key, payload,
                         lambda: self.runtime.fork(session_id, str(data.get("title", "")), actor),
                     )
                     return PlatformResponse(HTTPStatus.CREATED, result)
                 if len(parts) == 6 and parts[5] == "status":
-                    result = self.projects.idempotent(
+                    result = self._idempotent(
                         "session-status", key, payload,
-                        lambda: self.runtime.set_status(session_id, str(data.get("status", "")), actor),
+                        lambda: self._session_status(session_id, data, actor),
                     )
                     return PlatformResponse(200, result)
                 if len(parts) == 6 and parts[5] == "prompt":
-                    result = self.projects.idempotent(
+                    result = self._idempotent(
                         "session-prompt", key, payload,
                         lambda: self._session_prompt(session_id, actor, data),
                     )
                     return PlatformResponse(HTTPStatus.ACCEPTED, result)
                 if len(parts) == 7 and parts[5] == "employees" and parts[6] == "assign":
-                    result = self.projects.idempotent(
+                    result = self._idempotent(
                         "employees-assign", key, payload,
                         lambda: self._assign_employees(session_id, actor, data),
                     )
                     return PlatformResponse(200, result)
                 if len(parts) == 7 and parts[5] == "agent" and parts[6] == "start":
+                    if self.delivery_runtime:
+                        raise ValueError('请从事项的运行与分工面板授权执行，不另起 AgentLoop')
                     task_id = str(data.get("task_id") or self.runtime.get_session(session_id).get("task_id") or "")
                     if not task_id:
                         raise ValueError("agent/start 需要 task_id 或 Session 已绑定 Task")
-                    result = self.projects.idempotent(
+                    result = self._idempotent(
                         "agent-start", key, payload,
                         lambda: self.agent_loop.run(session_id, task_id, actor),
                     )
                     return PlatformResponse(200, result)
                 if len(parts) == 7 and parts[5] == "agent" and parts[6] == "step":
+                    if self.delivery_runtime:
+                        raise ValueError('请从事项运行控制恢复或继续，不另起 AgentLoop')
                     task_id = str(data.get("task_id") or self.runtime.get_session(session_id).get("task_id") or "")
                     if not task_id:
                         raise ValueError("agent/step 需要 task_id 或 Session 已绑定 Task")
                     round_no = int(data.get("round", 0)) or (
                         self.agent_loop.status(session_id)["turns_completed"] + 1
                     )
-                    result = self.projects.idempotent(
+                    result = self._idempotent(
                         "agent-step", key, {**payload, "round": round_no},
                         lambda: self.agent_loop.run_round(session_id, task_id, actor, round_no=round_no),
                     )
@@ -311,23 +421,20 @@ class HarnessPlatformAPI:
                         "fs": self.providers.fs_provider(profile_id),
                         "shell": self.providers.shell_provider(profile_id),
                         "mcp": self.providers.mcp_provider(profile_id),
-                        "allowed_actions": list(data.get("allowed_actions") or self._task_allowed_actions(task)),
-                        "auto_approve": bool(data.get("auto_approve", True)),
-                        "approved_tools": list(data.get("approved_tools") or ["*"]),
+                        "allowed_actions": self._task_allowed_actions(task),
+                        "auto_approve": False,
+                        "approved_tools": [],
                     }
-                    result = self.projects.idempotent(
+                    result = self._idempotent(
                         f"tool-{tool_id}", key, payload,
-                        lambda: self.tools.invoke(
-                            tool_id, context, dict(data.get("args") or {}),
-                            session_id=session_id, actor=actor, call_id=call_id,
-                        ),
+                        lambda: self._shared_tool(session_id, task_id, tool_id, context, data, actor, call_id),
                     )
                     return PlatformResponse(200, result)
             if path == "/api/v1/projects":
                 if method == "GET": return PlatformResponse(200, {"items": self.projects.list()})
                 if method == "POST":
                     actor, key = self._write_identity(headers)
-                    result = self.projects.idempotent("project-create", key, data, lambda: self.projects.create(
+                    result = self._idempotent("project-create", key, data, lambda: self.projects.create(
                         str(data.get("name", "")), str(data.get("root_path", "")),
                         list(data.get("eval_command") or []), str(data.get("id", "")),
                     ))
@@ -348,7 +455,7 @@ class HarnessPlatformAPI:
                 if method == "POST":
                     actor, key = self._write_identity(headers)
                     payload = {**data, "actor": actor}
-                    result = self.projects.idempotent(
+                    result = self._idempotent(
                         "initiative-create", key, payload,
                         lambda: self.initiatives.create(data, actor),
                     )
@@ -361,7 +468,7 @@ class HarnessPlatformAPI:
                 if len(parts) == 6 and parts[5] == "revise" and method == "POST":
                     actor, key = self._write_identity(headers)
                     payload = {**data, "initiative_id": initiative_id, "actor": actor}
-                    result = self.projects.idempotent(
+                    result = self._idempotent(
                         "initiative-revise", key, payload,
                         lambda: self.initiatives.revise(
                             initiative_id, data, actor, int(data.get("expected_version", 0)),
@@ -371,7 +478,7 @@ class HarnessPlatformAPI:
                 if len(parts) == 6 and parts[5] == "decision" and method == "POST":
                     actor, key = self._write_identity(headers)
                     payload = {**data, "initiative_id": initiative_id, "actor": actor}
-                    result = self.projects.idempotent(
+                    result = self._idempotent(
                         "initiative-decision", key, payload,
                         lambda: self.initiatives.decide(
                             initiative_id, str(data.get("decision", "")), actor,
@@ -386,7 +493,7 @@ class HarnessPlatformAPI:
                 if len(parts) == 6 and parts[5] == "delivery" and method == "POST":
                     actor, key = self._write_identity(headers)
                     payload = {**data, "initiative_id": initiative_id, "actor": actor}
-                    result = self.projects.idempotent(
+                    result = self._idempotent(
                         "initiative-delivery", key, payload,
                         lambda: self._promote_initiative(initiative_id, data, actor),
                     )
@@ -396,7 +503,7 @@ class HarnessPlatformAPI:
                     return PlatformResponse(200, {"items": self.tasks.list(int(query.get("limit", "100")))})
                 if method == "POST":
                     actor, key = self._write_identity(headers)
-                    result = self.projects.idempotent(
+                    result = self._idempotent(
                         "task-submit", key, data, lambda: self._submit_project_task(data, actor),
                     )
                     return PlatformResponse(HTTPStatus.ACCEPTED, result)
@@ -406,17 +513,19 @@ class HarnessPlatformAPI:
                 if len(parts) == 5 and method == "GET":
                     return PlatformResponse(200, self.tasks.get(task_id))
                 if len(parts) == 6 and parts[5] == "review" and method == "POST":
+                    if self.delivery_runtime:
+                        raise ValueError('本次交付必须由事项指定验收人通过事项验收入口接受')
                     actor, key = self._write_identity(headers)
                     boss = assert_boss_actor(actor)
                     payload = {**data, "task_id": task_id, "actor": boss}
-                    result = self.projects.idempotent("task-review", key, payload, lambda: self.tasks.review(
+                    result = self._idempotent("task-review", key, payload, lambda: self.tasks.review(
                         task_id, boss, str(data.get("decision", "")), str(data.get("note", "")),
                     ))
                     return PlatformResponse(200, result)
                 if len(parts) == 6 and parts[5] == "agent-critique" and method == "POST":
                     actor, key = self._write_identity(headers)
                     payload = {**data, "task_id": task_id, "actor": actor}
-                    result = self.projects.idempotent(
+                    result = self._idempotent(
                         "task-agent-critique", key, payload,
                         lambda: self._record_agent_critique(task_id, actor, data),
                     )
@@ -425,7 +534,7 @@ class HarnessPlatformAPI:
                 if method == "GET": return PlatformResponse(200, feedback_summary(self.tasks.path))
                 if method == "POST":
                     actor, key = self._write_identity(headers)
-                    result = self.projects.idempotent("feedback-create", key, data, lambda: add_feedback(
+                    result = self._idempotent("feedback-create", key, data, lambda: add_feedback(
                         str(data.get("task_id", "")), str(data.get("source", "")),
                         str(data.get("conclusion", "")), str(data.get("next_step", "")), self.tasks.path,
                     ))
@@ -436,7 +545,7 @@ class HarnessPlatformAPI:
                 if len(parts) == 6 and parts[5] == "review" and method == "POST":
                     actor, key = self._write_identity(headers)
                     payload = {**data, "feedback_id": feedback_id, "actor": actor}
-                    result = self.projects.idempotent("feedback-review", key, payload, lambda: review_feedback(
+                    result = self._idempotent("feedback-review", key, payload, lambda: review_feedback(
                         feedback_id, actor, str(data.get("decision", "")),
                         str(data.get("note", "")), self.tasks.path,
                     ))
@@ -445,7 +554,7 @@ class HarnessPlatformAPI:
                 if method == "GET": return PlatformResponse(200, self.evolutions.summary(int(query.get("limit", "100"))))
                 if method == "POST":
                     actor, key = self._write_identity(headers)
-                    result = self.projects.idempotent("evolution-create", key, data, lambda: self.evolutions.create(
+                    result = self._idempotent("evolution-create", key, data, lambda: self.evolutions.create(
                         str(data.get("feedback_id", "")), str(data.get("failure_signature", "")),
                         str(data.get("classification", "")), list(data.get("business_refs") or []) or None, actor,
                     ))
@@ -460,7 +569,7 @@ class HarnessPlatformAPI:
                     elif operation == "assets": producer = lambda: self.evolutions.record_assets(evolution_id, list(data.get("asset_changes") or []), actor)
                     elif operation == "verify": producer = lambda: self.evolutions.verify(evolution_id, str(data.get("candidate_task_id", "")), str(data.get("blocking_report", "")), actor)
                     else: return PlatformResponse(404, {"error": "not_found"})
-                    return PlatformResponse(200, self.projects.idempotent(f"evolution-{operation}", key, payload, producer))
+                    return PlatformResponse(200, self._idempotent(f"evolution-{operation}", key, payload, producer))
             if path == "/api/v1/course/status" and method == "GET":
                 return PlatformResponse(200, validate_mainline(self.repository_root))
             if path == "/api/v1/course/lessons" and method == "GET":
@@ -468,8 +577,12 @@ class HarnessPlatformAPI:
             if path.startswith("/api/v1/course/lessons/") and method == "GET":
                 return PlatformResponse(200, lesson_contract(int(path.rsplit("/", 1)[-1])).as_dict())
             return PlatformResponse(404, {"error": "not_found", "message": "Harness API 路径不存在"})
+        except PermissionError as exc:
+            return PlatformResponse(HTTPStatus.FORBIDDEN, {'error': 'permission_denied', 'message': str(exc)})
         except KeyError as exc:
             return PlatformResponse(404, {"error": "not_found", "message": str(exc)})
+        except MutationPending as exc:
+            return PlatformResponse(409, {'error': 'mutation_pending', 'message': str(exc)})
         except PluginRuntimeError as exc:
             return PlatformResponse(409, {"error": "plugin_runtime_conflict", "message": str(exc)})
         except (TypeError, ValueError) as exc:
@@ -480,6 +593,8 @@ class HarnessPlatformAPI:
     })
 
     def _submit_project_task(self, data: dict, actor: str) -> dict:
+        if self.delivery_runtime:
+            raise ValueError('共享运行视图的需求须从工作台首页事项开始；请确认方案后授权执行')
         project_id = str(data.get("project_id", ""))
         self.projects.get(project_id)
         refs = [f"PROJECT:{project_id}", *list(data.get("business_refs") or [])]
@@ -593,6 +708,8 @@ class HarnessPlatformAPI:
         return {"task_id": task_id, "critique": critique, "event": event, "session_id": (session or {}).get("id")}
 
     def _session_prompt(self, session_id: str, actor: str, data: dict) -> dict:
+        if self.delivery_runtime:
+            raise ValueError('请在工作台事项讨论中提出后续需求，再确认并授权新一轮交付')
         """Append a user message and start (or continue) delivery inside one Session."""
         session = self.runtime.get_session(session_id)
         if session.get("status") == "closed":

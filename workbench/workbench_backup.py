@@ -15,14 +15,15 @@ import zipfile
 
 from .maintenance import MaintenanceGate, MaintenanceBusy
 from .runtime_lease import WorkbenchRuntimeLease
-from .file_io import open_read, read_text
+from .file_io import atomic_write_text, open_read, read_text
 
 
 SCHEMA = 'workbench.backup/v1'
 RESTORE_MARKER = 'workbench-restored.json'
 EVIDENCE_DIRS = frozenset({'reports', 'project-reports', 'delivery', 'daily-delivery', 'course',
     'course-worktrees', 'specs', 'v0-contracts', 'initiative-research', 'initiative-integration',
-    'ci-evidence', 'hook-packages', 'candidates', 'release-index', 'baseline-audits', 'subagents'})
+    'ci-evidence', 'hook-packages', 'candidates', 'release-index', 'baseline-audits', 'subagents',
+    'learning-generation', 'deployments', 'migration', 'runtime-events', 'harness-sessions', 'sessions_jsonl'})
 SKIP_DIRS = frozenset({'.venv', 'node_modules', '__pycache__', '.cache', '.runtime', '.harness-runtime'})
 MAX_BYTES = 8 * 1024 ** 3
 MAX_FILES = 100000
@@ -31,6 +32,50 @@ BUSY_STAGES = {'researching', 'queued', 'executing', 'checking', 'cancelling', '
 
 def _json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2)
+
+
+def _begin_restore(target, backup_id):
+    """Block service startup before installing any database or evidence."""
+    marker = Path(target) / 'workbench-restore-failed.json'
+    atomic_write_text(marker, _json({'backup_id': backup_id, 'complete': False,
+        'phase': 'installing', 'automatic_replay': False,
+        'message': '恢复尚未完成；请保留原目录，不要启动此运行目录'}))
+    return marker
+
+
+def _failed_restore(target, installed, backup_id, error):
+    """Try every owned file; the preinstalled startup block survives cleanup errors."""
+    cleanup_errors = []
+    target = Path(target).resolve()
+    for path in reversed(installed):
+        try:
+            if not Path(path).resolve().is_relative_to(target):
+                raise ValueError('恢复清理路径已越界')
+            Path(path).unlink(missing_ok=True)
+        except (OSError, ValueError) as cleanup_error:
+            cleanup_errors.append(str(path) + ': ' + str(cleanup_error))
+    try:
+        atomic_write_text(target / 'workbench-restore-failed.json', _json({
+            'backup_id': backup_id, 'complete': False, 'phase': 'failed',
+            'automatic_replay': False, 'error': str(error), 'cleanup_errors': cleanup_errors,
+            'message': '恢复失败；保留原目录和备份，核对失败目录后再重试'}))
+    except OSError:
+        # The installing marker was written before any data. Disk or rename
+        # failures must not turn failed cleanup into an apparently usable DB.
+        pass
+    if cleanup_errors and hasattr(error, 'add_note'):
+        error.add_note('恢复清理未完成：' + '; '.join(cleanup_errors))
+
+
+def _publish_archive(temporary, archive):
+    """Same-filesystem atomic publication that cannot replace an earlier backup."""
+    # A rename/replace can clobber an existing archive on some hosts. Link fails
+    # closed if the target exists or the filesystem cannot support publication.
+    os.link(temporary, archive)
+    try:
+        Path(temporary).unlink()
+    except OSError:
+        pass  # The published, fully verified archive remains authoritative.
 
 
 def _hash(path):
@@ -140,6 +185,8 @@ def _database_state(database, runtime, *, check_busy=True, known_directories=Non
                 identity = str(item.get('id', item.get('task_id', '')))
                 if check_busy and table == 'tasks' and item.get('status') in {'queued', 'spec_ready', 'executing', 'evaluating'}:
                     raise MaintenanceBusy('仍有待执行或运行中的任务，请先完成、取消或核对中断任务再备份')
+                if check_busy and table == 'learning_generations' and item.get('status') == 'running':
+                    raise MaintenanceBusy('学习草稿尚在生成，请先完成或取消再备份')
                 for column, raw in item.items():
                     if not isinstance(raw, str):
                         continue
@@ -148,6 +195,8 @@ def _database_state(database, runtime, *, check_busy=True, known_directories=Non
                     except (ValueError, TypeError):
                         value = raw
                     if check_busy and column == 'payload' and isinstance(value, dict):
+                        if table in {'deployments', 'delivery_runtime'} and (value.get('status') in {'running', 'rolling_back'} or value.get('state') in {'running', 'pausing', 'cancelling'}):
+                            raise MaintenanceBusy('高级执行或部署尚未停止，请先停止并保存现场')
                         if table == 'initiative_workflows' and value.get('stage') in BUSY_STAGES:
                             raise MaintenanceBusy('仍有事项正在调研、排队、执行或集成，请结束后再备份')
                         if table == 'web_execution_plans' and value.get('state') == 'starting':
@@ -159,6 +208,8 @@ def _database_state(database, runtime, *, check_busy=True, known_directories=Non
                         if isinstance(nested, dict):
                             for path_key, hash_key in (('report_path', 'report_sha256'),
                                                        ('blocking_report', 'report_sha256'),
+                                                       ('process_path', 'process_sha256'),
+                                                       ('exit_process_path', 'exit_process_sha256'),
                                                        ('patch_path', 'patch_sha256')):
                                 if nested.get(path_key) and nested.get(hash_key) is not None:
                                     hash_bindings[field + '.' + path_key] = (nested[hash_key], field + '.' + hash_key, False)
@@ -181,7 +232,10 @@ def _database_state(database, runtime, *, check_busy=True, known_directories=Non
                             path = Path(nested)
                             if not path.is_absolute() and (not path.parts or path.parts[0] not in EVIDENCE_DIRS):
                                 continue
-                            path = path.resolve() if path.is_absolute() else (runtime / path).resolve()
+                            if not path.is_absolute() and field.rsplit('.', 1)[-1] in {'kind', 'type', 'status', 'state', 'action', 'role', 'decision', 'provider', 'seam'}:
+                                continue  # Event enums such as delivery/iteration are not file references.
+                            from .reference_paths import resolve_reference
+                            path = resolve_reference(path, runtime).resolve() if path.is_absolute() else (runtime / path).resolve()
                             inside = path.is_relative_to(runtime)
                             relative = path.relative_to(runtime).as_posix() if inside else None
                             kind = ('directory' if path.is_dir() or (known_directories is not None and
@@ -241,7 +295,9 @@ def _validate_database_references(database, manifest):
 
 def _checked_archive(archive, destination):
     try:
-        return _read_checked_archive(archive, destination)
+        from .reference_paths import reference_mapping_scope
+        with reference_mapping_scope(destination, {}):
+            return _read_checked_archive(archive, destination)
     except (zipfile.BadZipFile, sqlite3.DatabaseError, KeyError, TypeError) as error:
         raise ValueError('备份包或数据库不可读：' + str(error)) from error
 
@@ -295,7 +351,9 @@ def _read_checked_archive(archive, destination):
     with closing(_connect(destination / 'workbench.db')) as db:
         if db.execute('PRAGMA integrity_check').fetchone()[0] != 'ok' or db.execute('PRAGMA foreign_key_check').fetchone():
             raise ValueError('备份数据库完整性检查失败')
-    _validate_database_references(destination / 'workbench.db', manifest)
+    from .reference_paths import backup_reference_scope
+    with backup_reference_scope(manifest, destination):
+        _validate_database_references(destination / 'workbench.db', manifest)
     return manifest
 
 
@@ -305,6 +363,11 @@ class BackupService:
         self.directory = self.runtime / 'backups'
 
     def create(self, actor, *, busy_check=None):
+        from .reference_paths import load_reference_mappings, reference_mapping_scope
+        with reference_mapping_scope(self.runtime, load_reference_mappings(self.runtime)):
+            return self._create(actor, busy_check=busy_check)
+
+    def _create(self, actor, *, busy_check=None):
         if not isinstance(actor, str) or not actor.strip() or actor.strip().lower().startswith('agent:') or len(actor) > 80:
             raise ValueError('请填写真实操作人的署名')
         # Do not briefly freeze a known live worker merely to reject its backup.
@@ -325,6 +388,9 @@ class BackupService:
             identifier = 'WB-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + secrets.token_hex(6)
             temporary = self.directory / ('.' + identifier + '.tmp')
             archive = self.directory / (identifier + '.zip')
+            if temporary.exists() or archive.exists():
+                raise FileExistsError('备份编号已存在；原备份保留，请重新备份')
+            temporary_owned = False
             try:
                 with tempfile.TemporaryDirectory(prefix='.backup-', dir=self.runtime) as stage:
                     snapshot = Path(stage) / 'workbench.db'
@@ -339,19 +405,25 @@ class BackupService:
                             'table_counts': counts, 'references': references, 'external_dependencies': external + git_deps,
                             'excluded': excluded, 'warnings': warnings,
                             'boundary': '仅恢复本机原路径的工作台数据与文件证据；外部项目源码、FlowERP 数据、浏览器草稿和 Git 注册需另行保留。'}
-                        with zipfile.ZipFile(temporary, 'w', compression=zipfile.ZIP_DEFLATED) as bundle:
-                            bundle.writestr('manifest.json', _json(manifest))
-                            for relative in sorted(files):
-                                bundle.write(snapshot if relative == 'workbench.db' else self.runtime / relative, 'payload/' + relative)
+                        with temporary.open('xb') as archive_stream:
+                            temporary_owned = True
+                            with zipfile.ZipFile(archive_stream, 'w', compression=zipfile.ZIP_DEFLATED) as bundle:
+                                bundle.writestr('manifest.json', _json(manifest))
+                                for relative in sorted(files):
+                                    bundle.write(snapshot if relative == 'workbench.db' else self.runtime / relative, 'payload/' + relative)
                         again, _, _, again_directories = _paths(self.runtime)
                         if (again != {k: v for k, v in files.items() if k != 'workbench.db'} or again_directories != directories
                                 or source.execute('PRAGMA data_version').fetchone()[0] != version):
                             raise MaintenanceBusy('备份期间文件或数据库发生变化，未发布备份；请核对其他 CLI 进程')
                     with tempfile.TemporaryDirectory(prefix='.backup-check-', dir=self.runtime) as check:
                         _checked_archive(temporary, Path(check))
-                temporary.replace(archive)
+                _publish_archive(temporary, archive)
             except Exception:
-                temporary.unlink(missing_ok=True)
+                if temporary_owned:
+                    try:
+                        temporary.unlink(missing_ok=True)
+                    except OSError:
+                        pass
                 raise
         return self.get(identifier)
 
@@ -427,6 +499,7 @@ def restore_backup(archive, target_runtime):
             allowed = {'workbench-service.lock', 'workbench-maintenance.lock'}
             if any(p.name not in allowed for p in target.iterdir()):
                 raise ValueError('恢复目标必须为空；请先停服并把现有运行目录保留到其他位置')
+            failure_marker = _begin_restore(target, manifest['id'])
             installed = []
             try:
                 for relative in manifest['directories']:
@@ -439,16 +512,21 @@ def restore_backup(archive, target_runtime):
                     shutil.copyfile(staging / relative, destination)
                     if _hash(destination) != manifest['files'][relative]['sha256']:
                         raise ValueError('恢复后文件校验失败：' + relative)
-                _validate_database_references(target / 'workbench.db', manifest)
-                marker = {'schema': 'workbench.restore/v1', 'backup_id': manifest['id'],
+                from .reference_paths import backup_reference_scope
+                with backup_reference_scope(manifest, target):
+                    _validate_database_references(target / 'workbench.db', manifest)
+                migrated = (staging / 'migration' / 'reference-map.json').is_file()
+                marker = {'schema': 'workbench.migration/v1' if migrated else 'workbench.restore/v1', 'backup_id': manifest['id'],
                           'restored_at': datetime.now(timezone.utc).isoformat(), 'automatic_replay': False,
                           'human_review_required': True, 'external_dependencies': manifest.get('external_dependencies', [])}
-                (target / RESTORE_MARKER).write_text(_json(marker), encoding='utf-8')
-            except Exception:
-                for path in reversed(installed):
-                    path.unlink(missing_ok=True)
-                # Leave an actionable failure marker instead of a partial DB.
-                (target / 'workbench-restore-failed.json').write_text(_json({'backup_id': manifest['id'], 'complete': False}), encoding='utf-8')
+                if migrated:
+                    marker['execution_environment'] = 'not_verified'
+                    marker['restore_kind'] = 'same_path_backup'
+                installed.append(target / RESTORE_MARKER)
+                atomic_write_text(target / RESTORE_MARKER, _json(marker))
+                failure_marker.unlink()
+            except Exception as error:
+                _failed_restore(target, installed, manifest['id'], error)
                 raise
     return {'ok': True, 'id': manifest['id'], 'runtime': str(target), 'automatic_replay': False,
             'evidence_restore': {'status': 'restored', 'files_verified': len(manifest['files']),

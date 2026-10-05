@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import time
+import secrets
 
 
 _WINDOWS = os.name == 'nt'
@@ -17,7 +18,8 @@ def open_read(path, mode='rb', *, encoding=None, errors=None):
     """
     if mode not in {'r', 'rt', 'rb'}:
         raise ValueError('open_read only accepts read modes')
-    target = Path(path)
+    from .reference_paths import resolve_reference
+    target = resolve_reference(path)
     for attempt in range(len(_READ_DELAYS) + 1):
         try:
             return target.open(mode, encoding=encoding, errors=errors)
@@ -36,3 +38,25 @@ def read_bytes(path):
 def read_text(path, encoding='utf-8', *, errors=None):
     with open_read(path, 'r', encoding=encoding, errors=errors) as source:
         return source.read()
+
+
+def atomic_write_text(path, content, encoding='utf-8'):
+    """Replace control metadata after a complete write; leave old bytes on failure."""
+    target = Path(path)
+    temporary = target.with_name(target.name + '.' + secrets.token_hex(8) + '.tmp')
+    try:
+        temporary.write_text(content, encoding=encoding)
+        for attempt in range(len(_READ_DELAYS) + 1):
+            try:
+                temporary.replace(target)
+                return
+            except PermissionError as error:
+                if (not _WINDOWS or getattr(error, 'winerror', None) not in {None, 5, 32, 33}
+                        or attempt == len(_READ_DELAYS)):
+                    raise
+                time.sleep(_READ_DELAYS[attempt])
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass

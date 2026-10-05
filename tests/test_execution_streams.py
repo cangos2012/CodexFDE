@@ -1,6 +1,7 @@
 """Real local pipe behavior; does not contact or impersonate Codex."""
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -10,6 +11,20 @@ from workbench.execution import CodexExecutionRunner
 
 
 class ExecutionStreamTests(unittest.TestCase):
+    def test_cancelled_invocation_never_spawns_a_process(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = CodexExecutionRunner(root, root)
+            runner.control_event = threading.Event()
+            runner.control_event.set()
+            with patch('workbench.execution.spawn_owned_process') as spawn:
+                result = runner._run_codex_streaming(
+                    [sys.executable, '-c', "raise RuntimeError('must never execute')"],
+                    '', 10, lambda line: None, time.monotonic())
+                spawn.assert_not_called()
+            self.assertEqual(130, result.returncode)
+            self.assertIn('未启动进程', result.stderr)
+
     def test_chinese_prompt_survives_the_process_gate(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
