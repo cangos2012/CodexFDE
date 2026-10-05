@@ -143,7 +143,7 @@ LESSONS: tuple[LessonContract, ...] = (
             evals=("order_total_matches_lines",)),
     _lesson(8, "把同一套 Eval 接入 CI", "build", "远程复验与证据信封", "交付原子预占",
             "在同一套 Eval 的本地与 CI 复验下实现销售订单原子预占，缺货时整单回滚。",
-            refs=("ORDER:COURSE-DEMO", "SKU:COURSE-DEMO"), scope=("flowerp/", "eval/", "tests/", ".github/workflows/", "workbench/ci_evidence.py", "CI_GATE_SPEC.md"),
+            refs=("ORDER:COURSE-DEMO", "SKU:COURSE-DEMO"), scope=("flowerp/", "eval/", "tests/", ".github/workflows/", "workbench/ci_evidence.py"),
             acceptance=("库存充足时订单预占成功。", "任一行缺货时整单失败且无部分预占。", "本地与 CI 使用同一 Eval 身份。"),
             evals=("stock_never_negative", "sales_credit_and_atomic_reservation", "ci_evidence_envelope_is_honest")),
     _lesson(9, "把失败报告翻译成修复任务", "repair", "报告到 Repair Task 的确定性映射", "交付取消释放预占",
