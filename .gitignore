@@ -255,3 +255,10 @@ data/
 .tmp/
 *.pptx.inspect.ndjson
 ~$*.pptx
+
+# 课程本机实验输出；教学图片、README 和 examples 静态夹具仍随 Git 发布
+/docs/courses/**/assets/latest/**/*.json
+/docs/courses/**/assets/latest/**/*.txt
+/docs/courses/**/assets/latest/**/*.diff
+/docs/courses/**/assets/latest/**/*.html
+/docs/courses/**/assets/latest/**/*.csv

@@ -17,4 +17,10 @@ description: 审查修复 Loop 的实际轨迹、停止原因、末轮复验和�
 
 需要验证审查行为时使用[四个反例](references/review-cases.md)，保留实际响应与本人修订。
 
-对配套[候选轨迹](../../../assets/latest/candidate-last-repair/index.json)，把循环外审计单独计数。`use_codex=True` 不能独立证明调用了 Codex，应核对注入的执行器及子进程命令；协议占位用量不是实际 Token。根据原报告和 Diff 判断产品状态，不因 Loop 状态名称而重写发生顺序。
+以下命令供学员生成对照，不在只读审查时自动执行。需要候选对照轨迹时，先按[实践手册](../../../实践操作手册.md)的“参考 C”准备环境，再使用已提交的[候选实验脚本](../../candidate_loop_lab.py)。在仓库根目录、已激活的课程虚拟环境中运行：
+
+```text
+python -X utf8 docs/courses/L10/examples/candidate_loop_lab.py last-repair --run-dir .runtime/l10-review-01/last-repair
+```
+
+目录必须尚不存在，重跑更换名称；读取本人本轮目录中的 `index.json`、逐轮报告、Diff 与循环外审计。教师旧报告保留本机，不随 Git 发布；新输出用于同类行为对照，不是历史记录的原样重现。审查时把循环外审计单独计数。`use_codex=True` 不能独立证明调用了 Codex，应核对注入的执行器及子进程命令；协议占位用量不是实际 Token。根据原报告和 Diff 判断产品状态，不因 Loop 状态名称而重写发生顺序。
