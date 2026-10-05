@@ -96,6 +96,10 @@ class ExecutionStreamTests(unittest.TestCase):
             runner = CodexExecutionRunner(root, root)
             captured, streams, handles = [], [], []
             actual_start = threading.Thread.start
+            real_clock = time.monotonic
+            invoked_at = real_clock()
+            observed_at = None
+            validation_seconds = 5
             script = (
                 'import subprocess,sys,time\nfrom pathlib import Path\n'
                 'child=subprocess.Popen([sys.executable,"-c","import time;time.sleep(60)"])\n'
@@ -113,19 +117,36 @@ class ExecutionStreamTests(unittest.TestCase):
                 if getattr(thread._target, '__name__', '') in {'drain', 'feed'}:
                     streams.append(thread)
 
+            def execution_clock():
+                now = real_clock()
+                if observed_at is None:
+                    # Allow at most 30 real seconds to observe a live descendant.
+                    # Once startup expires, keep time advancing during cleanup.
+                    elapsed = now - invoked_at
+                    return invoked_at if elapsed < 30 else invoked_at + validation_seconds + elapsed - 30
+                return invoked_at + now - observed_at
+
             def on_line(line):
+                nonlocal observed_at
                 handle = kernel.OpenProcess(0x00100000 | 0x1000, False, int(line))
                 self.assertTrue(handle, 'could not retain the real pipe-holding descendant')
                 handles.append(handle)
                 self.assertEqual(258, kernel.WaitForSingleObject(handle, 0))
+                self.assertIsNone(captured[0][0].poll(), 'parent exited before startup observation')
+                observed_at = real_clock()
+                self.assertLessEqual(observed_at - invoked_at, 30, 'descendant startup exceeded 30 seconds')
                 gate.write_text('descendant was observed alive', encoding='utf-8')
 
             try:
                 with patch('workbench.execution.spawn_owned_process', side_effect=capture), \
-                     patch.object(threading.Thread, 'start', start):
+                     patch.object(threading.Thread, 'start', start), \
+                     patch('workbench.execution.time.monotonic', side_effect=execution_clock):
                     result = runner._run_codex_streaming(
-                        [sys.executable, '-u', '-c', script], '', 10, on_line, time.monotonic())
-                self.assertEqual(0, result.returncode, result.stderr)
+                        [sys.executable, '-u', '-c', script], '', validation_seconds, on_line, invoked_at)
+                self.assertIsNotNone(observed_at,
+                                     f'no live descendant observed within 30 seconds; returncode={result.returncode}, stderr={result.stderr!r}')
+                self.assertEqual(0, result.returncode,
+                                 f'parent exit/pipe EOF exceeded 5 seconds after startup observation: {result.stderr}')
                 self.assertEqual(1, len(handles))
                 self.assertEqual(0, kernel.WaitForSingleObject(handles[0], 1000),
                                  'descendant retained its pipes after the owned parent exited')
@@ -144,6 +165,82 @@ class ExecutionStreamTests(unittest.TestCase):
                 for process, _, _ in captured:
                     for name in ('stdin', 'stdout', 'stderr'): getattr(process, name).close()
                 for handle in handles: kernel.CloseHandle(handle)
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows Job close fault injection')
+    def test_parent_exit_owner_close_error_retries_cleanup_and_rejects_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = CodexExecutionRunner(root, root)
+            captured = []
+            real_clock = time.monotonic
+            invoked_at = real_clock()
+            observed_at = None
+            validation_seconds = 5
+            gate = root / 'ready-parent-may-exit'
+            script = (
+                'import time\nfrom pathlib import Path\n'
+                'print("fixture parent ready",flush=True)\n'
+                f'while not Path({str(gate)!r}).exists(): time.sleep(.01)\n'
+            )
+
+            class FailingClose:
+                def __init__(self, process, owner):
+                    self.process, self.owner, self.calls = process, owner, 0
+
+                def close(self):
+                    self.calls += 1
+                    if self.calls == 1:
+                        # The fault occurs after the owned parent has exited.
+                        if self.process.poll() is None:
+                            raise AssertionError('fixture close happened before parent exit')
+                        raise OSError('fixture early owner close failure')
+                    self.owner.close()
+
+            def capture(*args, **kwargs):
+                process, owner, prefix = spawn_owned_process(*args, **kwargs)
+                wrapped = FailingClose(process, owner)
+                captured.append((process, wrapped))
+                return process, wrapped, prefix
+
+            def execution_clock():
+                now = real_clock()
+                if observed_at is None:
+                    elapsed = now - invoked_at
+                    return invoked_at if elapsed < 30 else invoked_at + validation_seconds + elapsed - 30
+                return invoked_at + now - observed_at
+
+            def on_line(line):
+                nonlocal observed_at
+                self.assertEqual('fixture parent ready', line)
+                self.assertIsNone(captured[0][0].poll(), 'parent exited before ready observation')
+                observed_at = real_clock()
+                self.assertLessEqual(observed_at - invoked_at, 30, 'parent startup exceeded 30 seconds')
+                gate.write_text('ready parent was observed', encoding='utf-8')
+
+            try:
+                caught = None
+                with patch('workbench.execution.spawn_owned_process', side_effect=capture), \
+                     patch('workbench.execution.time.monotonic', side_effect=execution_clock):
+                    try:
+                        runner._run_codex_streaming([sys.executable, '-u', '-c', script],
+                                                   '', validation_seconds, on_line, invoked_at)
+                    except RuntimeError as error:
+                        caught = error
+                self.assertIsNotNone(observed_at, 'no ready parent observed within 30 seconds')
+                self.assertIsNotNone(caught, 'recovered early owner close error was accepted as success')
+                self.assertRegex(str(caught), 'fixture early owner close failure')
+                process, owner = captured[0]
+                self.assertIsInstance(caught.__cause__, OSError)
+                self.assertEqual(2, owner.calls)
+                self.assertIsNone(owner.owner.handle)
+                self.assertEqual(0, process.poll())
+                self.assertTrue(all(getattr(process, name).closed for name in ('stdin', 'stdout', 'stderr')))
+            finally:
+                for process, owner in captured:
+                    owner.owner.close()
+                    if process.poll() is None: process.kill()
+                    process.wait(timeout=5)
+                    for name in ('stdin', 'stdout', 'stderr'): getattr(process, name).close()
 
     @unittest.skipUnless(os.name == 'nt', 'Windows Job close fault injection')
     def test_owner_close_failure_retries_cleanup_and_rejects_result(self):

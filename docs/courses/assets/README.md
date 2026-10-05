@@ -2,6 +2,16 @@
 
 以下保留已发布的图示和历史截图，供逐项定位。文件存在不证明其所示运行属于当前版本；历史运行未在本次排查中重演，不作学生学习或产品验收证据。
 
+## 学习入口配图
+
+以下三张图由内置 ImageGen 于 2026-10-05 生成，用于 [docs 学习入口](../../README.md) 的关系解释和阅读导航，属于机制示意。
+
+- [先建工作台，再交付产品](readme-guide-20261005/01-build-workbench-deliver-flowerp.png)：区分工作台建设、FlowERP 交付与反馈改进。
+- [一讲怎样走到完成](readme-guide-20261005/02-complete-a-lesson.png)：首次判断、操作、复验、人审与迁移，失败时返回操作。
+- [按问题选择资料](readme-guide-20261005/03-choose-docs.png)：课表与大纲、courses、reference、architecture 各自的查阅用途。
+
+## 其他图示与历史截图
+
 - [course-three-layer.drawio](course-three-layer.drawio)
 - [course-three-layer.svg](course-three-layer.svg)
 - [fde-evidence-chain.png](fde-evidence-chain.png)
