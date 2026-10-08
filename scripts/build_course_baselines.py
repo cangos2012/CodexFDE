@@ -104,6 +104,7 @@ def scaffold_paths() -> list[Path]:
         ROOT / "tests" / "test_progression.py",
         ROOT / "README.md",
         ROOT / "AGENTS.md",
+        ROOT / "docs" / "README.md",
         ROOT / "docs" / "courses" / "讲义阅读导航.md",
         ROOT / "main.py",
         ROOT / "pyproject.toml",

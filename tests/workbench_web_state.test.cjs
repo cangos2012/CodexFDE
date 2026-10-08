@@ -11,6 +11,7 @@ function setup() {
     scrollIntoView() { this.scrolled = true; },
     focus() { this.focused = true; },
     close() { this.closed = true; },
+    showModal() { this.hidden = false; },
     appendChild(child) { this.children.push(child); },
     set innerHTML(value) { this.children = []; this.textContent = value; },
   });
@@ -67,27 +68,31 @@ test('unsigned submission sends nothing and points to the signature', async () =
   assert.match(nodes.get('task-submit-status').textContent, /课堂昵称/);
 });
 
-test('candidate preview rejects a link for another task', async () => {
+test('candidate preview rejects a plan for another task before enabling a start', async () => {
   const {context,nodes,pending}=setup();
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../workbench_web/platform.js'),'utf8'),context);
   context.document.getElementById('task-actor').value='maintenance';
   vm.runInContext("selectedTask='TASK-PREVIEW';",context);
   const opened=context.preparePreview('TASK-PREVIEW');
   pending[0].resolve(response({task_id:'TASK-OTHER',url:'http://127.0.0.1:9999'}));
   await opened;
-  assert.match(nodes.get('preview-status').textContent,/不匹配/);
-  assert.equal(nodes.get('prepare-preview').disabled,false);
-  assert.equal(nodes.get('preview-link'),undefined);
+  assert.equal(pending[0].url,'/api/v1/tasks/TASK-PREVIEW/preview-plan');
+  assert.notEqual(pending[0].options.method,'POST');
+  assert.match(nodes.get('preview-status').textContent,/不属于本任务/);
+  assert.equal(nodes.get('preview-plan-start').disabled,true);
+  assert.equal(nodes.get('preview-link').hidden,true);
 });
 
 test('late candidate preview cannot insert a link into another task', async () => {
   const {context,nodes,pending}=setup();
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../workbench_web/platform.js'),'utf8'),context);
   context.document.getElementById('task-actor').value='maintenance';
   vm.runInContext("selectedTask='TASK-PREVIEW';",context);
   const opened=context.preparePreview('TASK-PREVIEW');
   vm.runInContext("selectedTask='TASK-NEW';",context);
   pending[0].resolve(response({task_id:'TASK-PREVIEW',url:'http://127.0.0.1:9999'}));
   await opened;
-  assert.equal(nodes.get('preview-link'),undefined);
+  assert.equal(nodes.get('preview-link').hidden,true);
 });
 
 test('failed plan with an existing task stays visible and keeps its recovery marker', async () => {
@@ -237,6 +242,8 @@ test('uncertain submission retries the same key and closes after acceptance even
   context.document.getElementById('task-lesson').value = '13';
   context.document.getElementById('task-actor').value = 'maintainer';
   context.document.getElementById('task-request').value = '检查补货';
+  context.document.getElementById('verification-project').value = '';
+  vm.runInContext("courseVerificationState={lesson:'13',projectId:'',context:{ready:true,checks:[{name:'purchase_requires_approval'}],verification_key:'reviewed-target'}};", context);
   const first = context.submitTask({preventDefault() {}});
   const key = pending[0].options.headers['Idempotency-Key'];
   assert.ok(key);

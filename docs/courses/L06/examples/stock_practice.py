@@ -11,14 +11,15 @@ import sys
 ROOT=Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT))
 from workbench.course_experiments import copy_experiment_sources
+from workbench.file_io import read_bytes, read_text
 HERE=Path(__file__).resolve().parent
 L05=('tests/test_l05_receiving.py','tests/test_l05_scope.py','eval/l05_scope.py')
 ALLOWED=('eval/l06_runner.py','flowerp/service.py')
 NAMES=('l06_stock_consistency','l05_personal_receiving','l05_personal_scope','help_image')
 
 
-def read(path):return json.loads(Path(path).read_text('utf-8-sig'))
-def sha(path):return hashlib.sha256(Path(path).read_bytes().replace(b'\r\n',b'\n')).hexdigest()
+def read(path):return json.loads(read_text(path, encoding='utf-8-sig'))
+def sha(path):return hashlib.sha256(read_bytes(path).replace(b'\r\n',b'\n')).hexdigest()
 def inventory(candidate):
     return {p.relative_to(candidate).as_posix():sha(p) for p in sorted(candidate.rglob('*'))
             if p.is_file() and '__pycache__' not in p.parts and p.suffix!='.pyc'}
@@ -43,9 +44,9 @@ def prepare(run,l05_session):
     for origin,target in [('runner_starter.py','eval/l06_runner.py'),
                           ('checks_starter.py','eval/l06_checks.py'),
                           ('test_runner_contract.py','tests/test_l06_runner.py')]:
-        (candidate/target).write_text((HERE/origin).read_text('utf8'),'utf8')
+        (candidate/target).write_text(read_text(HERE/origin, encoding='utf8'),'utf8')
     service=candidate/'flowerp/service.py'
-    code=service.read_text('utf8')
+    code=read_text(service, encoding='utf8')
     start=code.index('    def export_inventory(')
     end=code.index('\n    def ',start+5)
     original=code[start:end]
@@ -95,14 +96,16 @@ def review(s,report):
     verify(s);report=report.resolve();record=read(report.with_suffix('.receipt.json'))
     if record['cwd']!=str(s['candidate']) or record['report_path']!=str(report):raise ValueError('Wrong candidate or report path')
     if record['files']!=inventory(s['candidate']):raise ValueError('Report does not describe current candidate files')
-    if not record['unchanged_during_run'] or record['report_sha256']!=sha(report):raise ValueError('Candidate or report changed')
+    raw=read_bytes(report)
+    if not record['unchanged_during_run'] or record['report_sha256']!=hashlib.sha256(raw.replace(b'\r\n',b'\n')).hexdigest():raise ValueError('Candidate or report changed')
+    report_data=json.loads(raw.decode('utf-8-sig'))
     sys.path.insert(0,str(ROOT))
     from eval.report_contract import validate_report
-    validate_report(read(report),NAMES,record['exit_code'],'all')
+    validate_report(report_data,NAMES,record['exit_code'],'all')
     # All mandatory business checks must retain their frozen blocking levels.
-    levels={r['name']:r['level'] for r in read(report)['results']}
+    levels={r['name']:r['level'] for r in report_data['results']}
     if levels!={n:('observing' if n=='help_image' else 'blocking') for n in NAMES}:raise ValueError('Required levels changed')
-    print(json.dumps(dict(report_consistent=True,business_decision=read(report)['summary']['decision']),ensure_ascii=False))
+    print(json.dumps(dict(report_consistent=True,business_decision=report_data['summary']['decision']),ensure_ascii=False))
 
 
 def main():

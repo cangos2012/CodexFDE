@@ -54,10 +54,12 @@ def main() -> int:
     workbench_serve_cmd.add_argument("--runtime-dir", help="覆盖本机 services.json 中保存的数据目录")
     workbench_serve_cmd.add_argument('--erp-url', default='http://127.0.0.1:8000', help='客户项目的本机地址')
     workbench_serve_cmd.add_argument("--enable-code-execution", action="store_true", help="允许在网页确认课程方案后授权隔离代码执行")
+    workbench_serve_cmd.add_argument('--enable-advanced-runtime', action='store_true', help='启用同一事项中的Session、工具授权和受管多AI分工')
     harness_serve_cmd = sub.add_parser("harness-serve", help="可选平台：完整 Harness（:8010，非大纲通过项）")
     harness_serve_cmd.add_argument("--host", default="127.0.0.1")
     harness_serve_cmd.add_argument("--port", type=int, default=8010)
     harness_serve_cmd.add_argument("--runtime-dir", default=".harness-runtime")
+    harness_serve_cmd.add_argument('--workbench-url', default='http://127.0.0.1:8001', help='唯一工作台根地址；自定义端口时同步设置')
     harness_serve_cmd.add_argument("--repository-root")
     harness_serve_cmd.add_argument("--bootstrap", action="store_true",
                                    help="启动时自动注册当前仓库为 PROJECT-FLOWERP")
@@ -143,6 +145,12 @@ def main() -> int:
     backup_cmd.add_argument("--label", default="manual")
     verify_cmd = sub.add_parser("verify-backup", help="校验备份可恢复性")
     verify_cmd.add_argument("path"); verify_cmd.add_argument("--runtime-dir", default=".runtime")
+    wb_backup_cmd = sub.add_parser('workbench-backup', help='停服创建工作台数据库与文件证据备份（不含客户数据）')
+    wb_backup_cmd.add_argument('--runtime-dir'); wb_backup_cmd.add_argument('--actor', required=True)
+    wb_verify_cmd = sub.add_parser('verify-workbench-backup', help='校验工作台备份包，不执行旧任务')
+    wb_verify_cmd.add_argument('path')
+    wb_restore_cmd = sub.add_parser('restore-workbench-backup', help='停服恢复到本机原运行路径的空目录')
+    wb_restore_cmd.add_argument('path'); wb_restore_cmd.add_argument('--runtime-dir', required=True)
     check_cmd = sub.add_parser("doctor", help="检查数据库、Schema 和运行目录")
     check_cmd.add_argument("--runtime-dir", default=".runtime")
     status_cmd = sub.add_parser("runtime-status", help="查看维护状态与实例租约")
@@ -176,7 +184,79 @@ def main() -> int:
     task_show_cmd.add_argument("task_id"); task_show_cmd.add_argument("--runtime-dir", default=".runtime")
     task_list_cmd = sub.add_parser("task-list", help="列出交付任务")
     task_list_cmd.add_argument("--runtime-dir", default=".runtime"); task_list_cmd.add_argument("--limit", type=int, default=30)
+    migrate_cmd = sub.add_parser('restore-workbench-migration', help='停服迁移证据到新空目录，保留原始引用和哈希')
+    migrate_cmd.add_argument('path'); migrate_cmd.add_argument('--runtime-dir', required=True); migrate_cmd.add_argument('--mapping-file', required=True)
+    migrate_check = sub.add_parser('verify-workbench-migration', help='复验迁移后的外部源码、Git和解释器，不重放任务')
+    migrate_check.add_argument('--runtime-dir', required=True)
     args = parser.parse_args()
+    return dispatch(args, parser)
+
+
+def dispatch(args, parser=None) -> int:
+    """Hold one runtime write span across files, subprocesses and DB commits."""
+    from .maintenance import MaintenanceGate, MaintenanceBusy
+    parser = parser or argparse.ArgumentParser()
+    commands = {
+        'workbench-init', 'workbench-project-add', 'workbench-task-create',
+        'workbench-evidence-add', 'feedback', 'harness-bootstrap',
+        'course-prepare', 'course-submit', 'course-release-index',
+        'course-baseline-audit', 'course-baseline-publish', 'course-candidate-export',
+        'course-candidate-promote', 'course-worktree-clean',
+    }
+    needs_guard = args.command in commands or args.command.startswith(('task-', 'subagent-'))
+    if args.command == 'course-spec':
+        needs_guard = True
+    try:
+        if needs_guard:
+            # Existing course/task defaults remain unchanged; the gate follows
+            # the exact runtime these commands already write.
+            runtime = getattr(args, 'runtime_dir', None) or '.runtime'
+            if args.command == 'course-spec' and args.output:
+                output = Path(args.output).resolve()
+                runtime = next((parent for parent in output.parents if (parent / 'workbench.db').is_file()), runtime)
+            with MaintenanceGate(runtime).write():
+                return _dispatch(args, parser)
+        return _dispatch(args, parser)
+    except MaintenanceBusy as error:
+        print('工作台命令未执行：' + str(error), file=sys.stderr)
+        return 2
+
+
+def _dispatch(args, parser) -> int:
+    if args.command in {'restore-workbench-migration', 'verify-workbench-migration'}:
+        from .migration import restore_migration, validate_migration_environment
+        from .runtime_lease import WorkbenchRuntimeLease
+        try:
+            if args.command == 'restore-workbench-migration':
+                mapping = json.loads(Path(args.mapping_file).read_text(encoding='utf-8'))
+                result = restore_migration(args.path, args.runtime_dir, mapping)
+            else:
+                with WorkbenchRuntimeLease(args.runtime_dir):
+                    result = validate_migration_environment(args.runtime_dir)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0 if result.get('ok', result.get('status') == 'ready') else 1
+        except (OSError, ValueError, RuntimeError) as error:
+            print('工作台迁移未完成：' + str(error), file=sys.stderr)
+            return 2
+    if args.command in {'workbench-backup', 'verify-workbench-backup', 'restore-workbench-backup'}:
+        from .workbench_backup import BackupService, verify_backup, restore_backup
+        from .runtime_lease import WorkbenchRuntimeLease, WorkbenchRuntimeInUse
+        from .maintenance import MaintenanceBusy
+        from .runtime_paths import service_runtime
+        try:
+            if args.command == 'workbench-backup':
+                runtime = service_runtime('workbench', args.runtime_dir)
+                with WorkbenchRuntimeLease(runtime):
+                    result = BackupService(runtime).create(args.actor)
+            elif args.command == 'verify-workbench-backup':
+                result = verify_backup(args.path)
+            else:
+                result = restore_backup(args.path, args.runtime_dir)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+        except (OSError, ValueError, KeyError, RuntimeError, WorkbenchRuntimeInUse, MaintenanceBusy) as error:
+            print('工作台备份或恢复未完成：' + str(error), file=sys.stderr)
+            return 2
     if args.command == 'environment-check':
         from .environment_check import check_environment
         report = check_environment(product=args.product, product_root=args.product_root)
@@ -316,7 +396,7 @@ def main() -> int:
 
         try:
             serve_workbench(args.host, args.port, args.runtime_dir, enable_code_execution=args.enable_code_execution,
-                            erp_url=args.erp_url)
+                            erp_url=args.erp_url, enable_advanced_runtime=args.enable_advanced_runtime)
         except ServerBindError as error:
             return report_bind_error(error)
         except WorkbenchRuntimeInUse as error:
@@ -325,7 +405,8 @@ def main() -> int:
         return 0
     if args.command == "harness-serve":
         try:
-            serve_harness(args.host, args.port, args.runtime_dir, args.repository_root, args.bootstrap)
+            serve_harness(args.host, args.port, args.runtime_dir, args.repository_root, args.bootstrap,
+                          upstream_url=args.workbench_url)
         except ServerBindError as error:
             return report_bind_error(error)
         return 0

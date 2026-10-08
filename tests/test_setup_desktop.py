@@ -4,12 +4,39 @@ import unittest
 import json
 import hashlib
 import subprocess
+import os
+import sys
 from unittest.mock import patch
 
-from workbench.setup_desktop import prepare_materials, prepare, initialize_reference
+from workbench.setup_desktop import prepare_materials, prepare, initialize_reference, run as setup_run
 
 
 class SetupDesktopTests(unittest.TestCase):
+    def test_component_check_succeeds_when_customer_package_is_unavailable(self):
+        # Skip installation and material setup; execute the real component check
+        # in a child process that cannot import the independent customer package.
+        repository = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            python = root / '.venv' / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
+            python.parent.mkdir(parents=True)
+            python.touch()
+            checks = []
+
+            def run_step(command, cwd):
+                if '-c' not in command:
+                    return ''
+                checks.append(command)
+                code = (f'import sys; sys.path.insert(0, {str(repository)!r}); '
+                        "sys.modules['flowerp'] = None; " + command[-1])
+                return setup_run([sys.executable, '-X', 'utf8', '-c', code], cwd)
+
+            with patch('workbench.setup_desktop.prepare_materials'), \
+                 patch('workbench.setup_desktop.run', side_effect=run_step):
+                self.assertEqual(0, prepare(root))
+            self.assertEqual(1, len(checks))
+            self.assertFalse((root / '.runtime/startup-logs/environment-setup.log').exists())
+
     def reference_fixture(self, root):
         subprocess.run(['git', 'init', '--quiet'], cwd=root, check=True)
         (root / 'source.txt').write_bytes(b'reference\n')

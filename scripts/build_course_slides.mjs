@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { l04Pages } from './course_slide_lessons/l04.mjs';
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -535,6 +536,15 @@ function addTermsTable(slide, meta, lesson) {
   }
 }
 
+function lessonTaskMaterialPath(number) {
+  const directory = `docs/courses/L${String(number).padStart(2, "0")}`;
+  for (const name of ["行动卡.md", "实践操作手册.md"]) {
+    const relative = `${directory}/${name}`;
+    if (existsSync(path.join(workspaceDir, relative))) return relative;
+  }
+  throw new Error(`L${String(number).padStart(2, "0")} 缺少实践与验收材料`);
+}
+
 function addNotes(slide, blueprint, meta, page) {
   const sources = blueprint.sources.map((source) => `${source.label}: ${source.url}`).join("\n");
   slide.speakerNotes.textFrame.setText([
@@ -543,7 +553,7 @@ function addNotes(slide, blueprint, meta, page) {
     `时间点：${page.time}`,
     `本页目的：${page.title}`,
     `讲解边界：${meta.boundary}`,
-    `讲义：docs/courses/L${String(blueprint.number).padStart(2, "0")}/行动卡.md`,
+    `实践与验收：${lessonTaskMaterialPath(blueprint.number)}`,
     `一手来源核验日期：${blueprint.verifiedAt}`,
     sources,
   ].join("\n"));
@@ -698,7 +708,7 @@ async function buildDeck(blueprint) {
           break;
         case 22:
           addText(slide, "课后行动", { left: 100, top: 182, width: 300, height: 45 }, { fontSize: 23, bold: true, color: meta.accent });
-          addBody(slide, `${meta.command}\n\n任务卡：${[1, 2].includes(blueprint.number) ? `docs/courses/L${String(blueprint.number).padStart(2, "0")}/行动卡.md` : `docs/courses/L${String(blueprint.number).padStart(2, "0")}/行动卡.md`}\n实验：${[1, 2].includes(blueprint.number) ? `docs/courses/L${String(blueprint.number).padStart(2, "0")}/` : `docs/courses/labs/L${String(blueprint.number).padStart(2, "0")}/`}\n\n交付首次判断、失败证据、范围内 Diff、复验结果和第二次签字。`, { left: 100, top: 235, width: 1080, height: 330, fontSize: 24, fill: COLORS.white });
+          addBody(slide, `${meta.command}\n\n实践与验收：${lessonTaskMaterialPath(blueprint.number)}\n实验：${[1, 2].includes(blueprint.number) ? `docs/courses/L${String(blueprint.number).padStart(2, "0")}/` : `docs/courses/labs/L${String(blueprint.number).padStart(2, "0")}/`}\n\n交付首次判断、失败证据、范围内 Diff、复验结果和第二次签字。`, { left: 100, top: 235, width: 1080, height: 330, fontSize: 24, fill: COLORS.white });
           break;
         default:
           throw new Error(`Unhandled page ${page.number}`);
@@ -724,8 +734,9 @@ async function main() {
     const basename = `${safeFileName(blueprint.number, blueprint.title)}.pptx`;
     const pilotDir = path.join(workspaceDir, ".tmp", "course-slides-pilot");
     if (pilot) await fs.mkdir(pilotDir, { recursive: true });
-    const lessonOutputDir = [1, 2].includes(blueprint.number) && path.resolve(outputDir) === path.join(workspaceDir, "docs", "courses", "slides")
-      ? path.join(workspaceDir, "docs", "courses", `L${String(blueprint.number).padStart(2, "0")}`, "slides") : outputDir;
+    const lessonOutputDir = path.resolve(outputDir) === path.join(workspaceDir, "docs", "courses", "slides")
+      ? path.join(workspaceDir, "docs", "courses", `L${String(blueprint.number).padStart(2, "0")}`,
+                  "reference", "archive", "slides", "generated") : outputDir;
     await fs.mkdir(lessonOutputDir, { recursive: true });
     const finalPath = pilot ? path.join(pilotDir, `pilot-${basename}`) : path.join(lessonOutputDir, basename);
     const candidatePath = path.join(tmpDir, `candidate-L${String(blueprint.number).padStart(2, "0")}.pptx`);

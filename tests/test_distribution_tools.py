@@ -8,6 +8,7 @@ from unittest.mock import patch
 import zipfile
 
 from workbench.package_desktop import build
+from workbench.file_io import open_read, read_bytes
 from scripts import prepare_erp_page_audit as page_audit
 from scripts import sync_outline_contracts
 from scripts.prepare_l15_export_audit import validate_initial_failure
@@ -69,14 +70,14 @@ class DistributionTests(unittest.TestCase):
                        side_effect=lambda _root, n: {'ref': f'course/l{n:02d}-start'}):
                 result = build(root, output)
             self.assertGreater(result['bytes'], 0)
-            with zipfile.ZipFile(output) as archive:
+            with open_read(output) as stream, zipfile.ZipFile(stream) as archive:
                 self.assertIn('课程工作台/workbench_web/index.html', archive.namelist())
                 self.assertNotIn('课程工作台/web/index.html', archive.namelist())
                 self.assertIn('独立客户项目', archive.read('课程工作台/先读我.md').decode())
-            original = output.read_bytes()
+            original = read_bytes(output)
             with self.assertRaises(FileExistsError):
                 build(root, output)
-            self.assertEqual(original, output.read_bytes())
+            self.assertEqual(original, read_bytes(output))
 
     def test_page_audit_dispatches_to_customer_and_preserves_failure(self):
         with tempfile.TemporaryDirectory() as directory:

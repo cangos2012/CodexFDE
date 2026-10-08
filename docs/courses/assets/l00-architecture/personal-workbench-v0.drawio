@@ -1,0 +1,58 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="drawio" version="31.4.4">
+  <diagram id="V0.0 本机运行结构" name="V0.0 本机运行结构">
+    <mxGraphModel dx="1200" dy="430" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1140" pageHeight="430" background="#ffffff">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="V0.0：浏览器、程序和数据文件" style="whiteSpace=wrap;html=1;fontFamily=Microsoft YaHei;fontColor=#172b4d;text;strokeColor=none;fillColor=none;fontSize=33;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="30" y="10" width="1080" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" value="这三部分都在你自己的电脑上" style="whiteSpace=wrap;html=1;fontFamily=Microsoft YaHei;fontColor=#172b4d;text;strokeColor=none;fillColor=none;fontSize=22;fontStyle=0;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="30" y="65" width="1080" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="browser" value="&lt;div style=&quot;font-size:30px;font-weight:700;line-height:1.25&quot;&gt;浏览器&lt;/div&gt;&lt;div style=&quot;font-size:23px;line-height:1.3;margin-top:10px&quot;&gt;输入与查看事项&lt;/div&gt;" style="whiteSpace=wrap;html=1;fontFamily=Microsoft YaHei;fontColor=#172b4d;rounded=1;arcSize=12;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=2;align=center;verticalAlign=middle;spacing=12;fontSize=26;" vertex="1" parent="1">
+          <mxGeometry x="30" y="150" width="220" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="app" value="&lt;div style=&quot;font-size:30px;font-weight:700;line-height:1.25&quot;&gt;Python 程序&lt;/div&gt;&lt;div style=&quot;font-size:23px;line-height:1.3;margin-top:10px&quot;&gt;app.py&lt;/div&gt;" style="whiteSpace=wrap;html=1;fontFamily=Microsoft YaHei;fontColor=#172b4d;rounded=1;arcSize=12;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=2;align=center;verticalAlign=middle;spacing=12;fontSize=26;" vertex="1" parent="1">
+          <mxGeometry x="430" y="150" width="240" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="database" value="&lt;div style=&quot;font-size:30px;font-weight:700;line-height:1.25&quot;&gt;SQLite&lt;/div&gt;&lt;div style=&quot;font-size:23px;line-height:1.3;margin-top:10px&quot;&gt;事项与结果&lt;/div&gt;" style="whiteSpace=wrap;html=1;fontFamily=Microsoft YaHei;fontColor=#172b4d;shape=cylinder3;size=20;boundedLbl=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;align=center;verticalAlign=middle;spacing=12;fontSize=26;" vertex="1" parent="1">
+          <mxGeometry x="850" y="140" width="260" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="request" value="输入 / 查询" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#526780;strokeWidth=2;endArrow=block;endFill=1;fontSize=23;labelBackgroundColor=#ffffff;fontFamily=Microsoft YaHei;fontColor=#172b4d;exitX=1;exitY=0.3;entryX=0;entryY=0.3;exitDx=0;exitDy=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="browser" target="app">
+          <mxGeometry x="0" y="0" relative="1" as="geometry">
+            <mxPoint x="0" y="-26" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="response" value="返回页面" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#526780;strokeWidth=2;endArrow=block;endFill=1;fontSize=23;labelBackgroundColor=#ffffff;fontFamily=Microsoft YaHei;fontColor=#172b4d;exitX=0;exitY=0.7;entryX=1;entryY=0.7;exitDx=0;exitDy=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="app" target="browser">
+          <mxGeometry x="0" y="0" relative="1" as="geometry">
+            <mxPoint x="0" y="26" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="write" value="写入" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#526780;strokeWidth=2;endArrow=block;endFill=1;fontSize=23;labelBackgroundColor=#ffffff;fontFamily=Microsoft YaHei;fontColor=#172b4d;exitX=1;exitY=0.3;entryX=0;entryY=0.33;exitDx=0;exitDy=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="app" target="database">
+          <mxGeometry x="0" y="0" relative="1" as="geometry">
+            <mxPoint x="0" y="-26" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="read" value="读回" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#526780;strokeWidth=2;endArrow=block;endFill=1;fontSize=23;labelBackgroundColor=#ffffff;fontFamily=Microsoft YaHei;fontColor=#172b4d;exitX=0;exitY=0.67;entryX=1;entryY=0.7;exitDx=0;exitDy=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="database" target="app">
+          <mxGeometry x="0" y="0" relative="1" as="geometry">
+            <mxPoint x="0" y="26" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="url" value="127.0.0.1:8001" style="whiteSpace=wrap;html=1;fontFamily=Microsoft YaHei;fontColor=#172b4d;text;strokeColor=none;fillColor=none;fontSize=21;fontStyle=0;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="0" y="310" width="280" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="launch" value="在终端 B 启动" style="whiteSpace=wrap;html=1;fontFamily=Microsoft YaHei;fontColor=#172b4d;text;strokeColor=none;fillColor=none;fontSize=22;fontStyle=0;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="400" y="310" width="300" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="path" value=".runtime/workbench.db" style="whiteSpace=wrap;html=1;fontFamily=Microsoft YaHei;fontColor=#172b4d;text;strokeColor=none;fillColor=none;fontSize=21;fontStyle=0;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="780" y="310" width="360" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="restart" value="重启后，app.py 从同一个数据文件读回原记录。" style="whiteSpace=wrap;html=1;fontFamily=Microsoft YaHei;fontColor=#172b4d;text;strokeColor=none;fillColor=none;fontSize=23;fontStyle=0;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="30" y="375" width="1080" height="35" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

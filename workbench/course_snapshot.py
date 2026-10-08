@@ -9,7 +9,8 @@ import hashlib
 import json
 import os
 import re
-import subprocess
+import secrets
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,14 +19,17 @@ from .lesson_constructibility import apply_student_start
 
 SOURCE_DIRS = {".codex", ".github", "agent", "deploy", "docs", "eval", "harness_web",
                "scripts", "tests", "workbench", "workbench_web"}
-ROOT_FILES = {"AGENTS.md", "FDE_SPEC.md", "CI_GATE_SPEC.md", "README.md", "pyproject.toml", "main.py", ".gitignore", "首次使用.cmd", "打开工作台.cmd"}
+ROOT_FILES = {"AGENTS.md", "FDE_SPEC.md", "README.md", "pyproject.toml", "main.py", ".gitignore", ".gitattributes", "首次使用.cmd", "打开工作台.cmd"}
 TEXT_SUFFIXES = {".py", ".md", ".json", ".toml", ".yaml", ".yml", ".js", ".mjs", ".html", ".css",
-                 ".txt", ".sh", ".ps1", ".code-workspace", ".svg", ".drawio"}
+                 ".txt", ".sh", ".zsh", ".ps1", ".code-workspace", ".svg", ".drawio"}
 EXCLUDED_DIRS = {".git", ".venv", "__pycache__", "node_modules", ".runtime", ".harness-runtime", ".course"}
 
 
-def _git(target: Path, *args: str) -> str:
-    result = subprocess.run(["git", *args], cwd=target, text=True, encoding="utf-8", capture_output=True, check=False, timeout=120)
+def _git(target: Path, *args: str, runtime=None) -> str:
+    from .delivery_runtime import DeliveryRuntime
+    receipt_root = Path(runtime) / 'git-processes' if runtime is not None else Path(tempfile.gettempdir()) / 'workbench-git-processes'
+    result = DeliveryRuntime._git_process(["git", *args], cwd=target,
+        receipt_dir=receipt_root / secrets.token_hex(12), check=False)
     if result.returncode:
         raise RuntimeError(f"教学快照 Git 操作失败：{result.stderr.strip()}")
     return result.stdout.strip()
@@ -116,13 +120,13 @@ def prepare_source_snapshot(repository_root: str | Path, runtime_dir: str | Path
         (target / '.course').mkdir(exist_ok=True)
         (target / '.course/product-source.json').write_text(json.dumps(external_source, ensure_ascii=False, indent=2), encoding='utf-8')
     student_start = apply_student_start(target, lesson_number)
-    _git(target, "init", "--quiet")
+    _git(target, "init", "--quiet", runtime=runtime)
     # Runtime evidence remains outside the baseline commit.
     (target / ".git/info/exclude").write_text(".course/\n.runtime/\n", encoding="utf-8")
-    _git(target, "add", "--all")
+    _git(target, "add", "--all", runtime=runtime)
     _git(target, "-c", "user.name=Course source snapshot", "-c", "user.email=course-snapshot@localhost",
-         "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Local lesson start snapshot; not a published course baseline")
-    commit = _git(target, "rev-parse", "HEAD")
+         "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Local lesson start snapshot; not a published course baseline", runtime=runtime)
+    commit = _git(target, "rev-parse", "HEAD", runtime=runtime)
     payload = {
         "mode": "local_source_snapshot", "path": str(target), "source_root": str(source),
         "source_manifest": manifest,

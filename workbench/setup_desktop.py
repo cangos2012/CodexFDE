@@ -116,7 +116,7 @@ def prepare(root=ROOT):
     run([str(python), '-X', 'utf8', '-m', 'pip', 'install', '--disable-pip-version-check', '-e', '.'], root)
     print('3/3 检查工作台组件……', flush=True)
     run([str(python), '-X', 'utf8', '-c',
-         'import workbench.desktop, workbench.web_execution, flowerp, eval.harness'], root)
+         'import workbench.desktop, workbench.web_execution, eval.harness'], root)
     print('准备完成。现在可以双击“打开工作台”。授权 AI 写代码前，还需按 L00 完成 Codex 安装与登录。', flush=True)
     return 0
 

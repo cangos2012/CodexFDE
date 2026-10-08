@@ -63,10 +63,24 @@ Eval 绿色说明质量门通过，不代表采购业务被批准。Agent、自�
 
 ## 推荐复验入口
 
+**Windows（PowerShell）：**
+
 ```powershell
 Set-Location $env:FLOWERP_PROJECT_ROOT
 .\.venv\Scripts\python.exe -X utf8 -m unittest discover -s tests -v
 .\.venv\Scripts\python.exe -X utf8 -m eval.harness --suite blocking
+```
+
+**macOS（zsh）：**
+
+```zsh
+(
+  cd "${FLOWERP_PROJECT_ROOT:?请先设置独立 FlowERP 仓库绝对路径}" || exit 1
+  ./.venv/bin/python -X utf8 -m unittest discover -s tests -v
+  printf '测试退出码：%s\n' "$?"
+  ./.venv/bin/python -X utf8 -m eval.harness --suite blocking
+  printf 'Eval 退出码：%s\n' "$?"
+)
 ```
 
 参考仓库全绿只能说明参考实现当前满足门禁，不能证明学生亲手构造了能力。

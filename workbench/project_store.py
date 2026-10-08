@@ -15,7 +15,7 @@ class ProjectStore:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path).resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.connect() as conn:
+        with self.connect(create=True) as conn:
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS harness_projects(
@@ -41,8 +41,9 @@ class ProjectStore:
             )
 
     @contextmanager
-    def connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.path, timeout=15)
+    def connect(self, *, create=False) -> Iterator[sqlite3.Connection]:
+        conn = sqlite3.connect(self.path, timeout=15) if create else sqlite3.connect(
+            self.path.as_uri() + '?mode=rw', uri=True, timeout=15)
         conn.row_factory = sqlite3.Row
         try:
             yield conn
@@ -53,10 +54,18 @@ class ProjectStore:
         finally:
             conn.close()
 
+    def validate_root_source(self, root_path: str | Path) -> Path:
+        root = Path(root_path).resolve()
+        runtime = self.path.parent.resolve()
+        # Source may contain the data directory, but data must not contain source.
+        if root.is_relative_to(runtime):
+            raise ValueError("项目源码不得位于工作台数据目录内，请选择独立源码目录")
+        return root
+
     def create(self, name: str, root_path: str | Path,
                eval_command: list[str], project_id: str = "", *, allow_pending_eval=False) -> dict:
         label = name.strip()
-        root = Path(root_path).resolve()
+        root = self.validate_root_source(root_path)
         command = [str(part).strip() for part in eval_command if str(part).strip()]
         if not label:
             raise ValueError("项目名称不能为空")
@@ -83,17 +92,20 @@ class ProjectStore:
             raise KeyError(project_id)
         item = dict(row)
         item["eval_command"] = json.loads(item.pop("eval_command_json"))
+        from .reference_paths import resolve_reference
+        item['root_path'] = str(resolve_reference(item['root_path'], self.path.parent))
+        item['eval_command'] = [str(resolve_reference(p, self.path.parent)) if Path(p).is_absolute() else p for p in item['eval_command']]
+        with self.connect() as conn:
+            available = conn.execute("SELECT 1 FROM sqlite_master WHERE name='project_configurations'").fetchone()
+            config = conn.execute('SELECT revision,payload FROM project_configurations WHERE project_id=?', (project_id,)).fetchone() if available else None
+        item.update(configuration_revision=config['revision'] if config else 0,
+                    **(json.loads(config['payload']) if config else {'preview_config': None, 'deployment_profiles': []}))
         return item
 
     def list(self) -> list[dict]:
         with self.connect() as conn:
             rows = conn.execute("SELECT * FROM harness_projects ORDER BY created_at,id").fetchall()
-        items = []
-        for row in rows:
-            item = dict(row)
-            item["eval_command"] = json.loads(item.pop("eval_command_json"))
-            items.append(item)
-        return items
+        return [self.get(row['id']) for row in rows]
 
     def rename(self, project_id: str, name: str) -> dict:
         """Change the display name without replacing identity or linked records."""

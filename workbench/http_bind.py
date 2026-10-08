@@ -38,11 +38,12 @@ def create_http_server(
     *,
     service_name: str,
     retry_command: str,
+    server_class=None,
 ) -> ThreadingHTTPServer:
     """Create a server while converting low-level bind failures into guidance."""
 
     try:
-        return ExclusiveThreadingHTTPServer((host, port), handler)
+        return (server_class or ExclusiveThreadingHTTPServer)((host, port), handler)
     except OSError as error:
         reason = _bind_reason(error)
         windows_check = (

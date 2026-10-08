@@ -74,6 +74,8 @@ class DeliveryViewTests(unittest.TestCase):
         )
         self.assertEqual([], compact["eval"]["results"])
         self.assertEqual(view["eval"]["cases"], compact["eval"]["cases"])
+        self.assertEqual("可用库存不为负，缺货不产生部分写入", view["eval"]["check_labels"]["stock_never_negative"])
+        self.assertEqual(view["eval"]["check_labels"], compact["eval"]["check_labels"])
         self.assertEqual(view["eval"]["report_path"], compact["eval"]["report_path"])
         self.assertEqual(view["eval"]["report_sha256"], compact["eval"]["report_sha256"])
         self.assertIn("approve", view["allowed_actions"])

@@ -8,8 +8,54 @@ let pendingSubmission = null;
 let executionPlan = null;
 let webCodeAvailable = false;
 let composerMode = 'verify';
+let courseVerificationState = null;
+let courseVerificationReadVersion = 0;
+let courseContractReadVersion = 0;
+let courseVerificationSubmitting = false;
+let courseCodeReadinessMessage = '';
 let selectedInitiativeBinding = null;
 let deliveryPanel = 'summary';
+let workbenchServiceIdentity = null;
+let workbenchServiceFrozen = false;
+let workbenchFreezeObserver = null;
+let workbenchStartupReady = false;
+let workbenchStartupPending = null;
+let workbenchStartupBlocked = false;
+const workbenchWriteButtons = ['save-initiative','decide-initiative','v0-submit','iw-discuss','iw-recheck','iw-defer-people',
+  'iw-confirm-prd','iw-confirm','iw-execute','iw-accept','iw-integrate','iw-cancel','iw-release','iw-outcome','iw-reopen',
+  'iw-eval-run','iw-loop-save','iw-ci-record','iw-hook-prepare','iw-learning-create','iw-learning-decide','iw-learning-generate',
+  'iw-learning-cancel-generation','iw-learning-recall','iw-learning-trial','iw-runtime-profile-save','iw-runtime-pause',
+  'iw-runtime-resume','iw-runtime-cancel','iw-subtask-prepare','iw-subtask-start','iw-deployment-prepare','iw-deployment-start',
+  'iw-deployment-verify','iw-rollback-confirm','preview-plan-start','action-approve','action-reject','action-verify',
+  'task-submit','authorize-code','prepare-code','prepare-preview','project-register','plan-save','migration-prepare','backup-create'];
+function workbenchWritesFrozen(){return workbenchServiceFrozen || workbenchStartupBlocked;}
+function applyWorkbenchServiceFreeze() {
+  for(const id of workbenchWriteButtons){const button=document.getElementById(id);if(button && !button.disabled)button.disabled=true;}
+  document.querySelectorAll('#iw-learning-assets button,#iw-runtime-approvals button,#backup-list button,[data-service-write]').forEach(button=>{if(!button.disabled)button.disabled=true;});
+}
+function freezeWorkbenchService(message) {
+  if(!workbenchServiceFrozen && typeof WorkbenchDrafts!=='undefined')WorkbenchDrafts.flush();
+  workbenchServiceFrozen=true;executionPlan=null;
+  const text=message+'。关键操作已冻结，未提交草稿保留。请重新载入页面并核对服务、运行目录与当前事项；不会自动采用新的服务身份。';
+  const banner=document.getElementById('service-identity-status');if(banner){banner.hidden=false;banner.textContent=text;}
+  show('data-status',text);
+  if(typeof invalidateInitiativeWork==='function')invalidateInitiativeWork(text);
+  if(typeof projectPlanState!=='undefined')projectPlanState.readable=false;
+  if(typeof migrationState!=='undefined')migrationState.plan=null;
+  applyWorkbenchServiceFreeze();
+  if(typeof MutationObserver==='function' && document.body && !workbenchFreezeObserver) {
+    workbenchFreezeObserver=new MutationObserver(applyWorkbenchServiceFreeze);
+    workbenchFreezeObserver.observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['disabled']});
+  }
+}
+function checkWorkbenchService(response) {
+  if(typeof response.headers?.get!=='function')return;
+  const service=response.headers.get('X-Workbench-Service-Instance'),runtime=response.headers.get('X-Workbench-Runtime-Instance');
+  if(!service || !runtime || workbenchServiceIdentity && (service!==workbenchServiceIdentity.service || runtime!==workbenchServiceIdentity.runtime)) {
+    freezeWorkbenchService('工作台服务实例或运行数据库身份缺失或变化，当前证据身份无法继续核对');throw new Error('工作台服务身份变化或缺失；请重新载入核对');
+  }
+  if(!workbenchServiceIdentity){workbenchServiceIdentity={service,runtime};if(typeof WorkbenchMutationJournal!=='undefined')WorkbenchMutationJournal.init(runtime);}
+}
 function selectDeliveryPanel(panel) {
   deliveryPanel = panel === 'evidence' ? 'evidence' : 'summary';
   document.getElementById('delivery-digest').hidden = deliveryPanel !== 'summary';
@@ -55,6 +101,11 @@ function chooseComposerMode(mode) {
     button.classList.toggle('active', button.dataset.mode === composerMode);
     button.setAttribute('aria-pressed', String(button.dataset.mode === composerMode));
   });
+  show('mode-help', composerMode === 'verify'
+    ? '按所选讲次的固定用例检查现有代码。备注不会生成新的检查，也不会调用 Codex 修改代码。' +
+      (!webCodeAvailable && courseCodeReadinessMessage ? '\n代码执行条件：' + courseCodeReadinessMessage : '')
+    : courseCodeReadinessMessage || '核对本讲课程范围和执行方案，具名授权后才会启动 Codex。');
+  updateCourseVerificationSubmit();
 }
 function openComposer(binding) {
   try { actorName(); }
@@ -65,6 +116,7 @@ function openComposer(binding) {
   document.querySelector('label[for="code-requirement-spec"]').hidden = !!selectedInitiativeBinding;
   if(selectedInitiativeBinding) show('mode-help', '需求来源：' + binding.id + ' · 版本 ' + binding.version + '。L15/L16 代码执行会使用已保存需求并记录任务关联；仅复验时不建立该关联。');
   document.getElementById('task-composer').showModal();
+  refreshCourseVerification();
 }
 function focusEvidence(id) {
   if (['spec-card', 'diff-card', 'eval-card', 'control-card', 'event-history'].includes(id)) selectDeliveryPanel('evidence');
@@ -116,7 +168,7 @@ async function prepareCode() {
     document.getElementById('code-plan').hidden = false;
     document.getElementById('task-form').hidden = true;
     document.getElementById('code-options').hidden = true;
-    document.getElementById('authorize-code').disabled = false;
+    document.getElementById('authorize-code').disabled = workbenchWritesFrozen();
     show('code-status', '尚未执行。确认上面的具体任务后再授权。');
   } catch (error) { show('code-status', String(error.message || error)); }
 }
@@ -134,7 +186,7 @@ async function authorizeCode() {
     await followExecutionPlan(plan.plan_id);
   } catch (error) {
     show('code-status', '请核对或重试同一方案：' + String(error.message || error));
-    document.getElementById('authorize-code').disabled = false;
+    document.getElementById('authorize-code').disabled = workbenchWritesFrozen();
   }
 }
 
@@ -165,7 +217,7 @@ async function followExecutionPlan(planId) {
     setTimeout(function(){ followExecutionPlan(planId).catch(function(error){
       show('code-status', '进度读取失败，请重试同一方案：' + error.message);
       show('execution-recovery-status', '进度暂时不可读，请再次查看原记录：' + error.message);
-      document.getElementById('authorize-code').disabled = false;
+      document.getElementById('authorize-code').disabled = workbenchWritesFrozen();
     }); }, 2000);
   }
 }
@@ -266,17 +318,46 @@ function renderWorkflowGraph(graph) {
 }
 
 async function api(path, options) {
+  if(workbenchServiceFrozen)throw new Error('工作台服务身份已变化，操作保持冻结；请重新载入核对');
   const read = !options || !options.method || options.method.toUpperCase() === "GET";
-  const controller = read ? new AbortController() : null;
-  const timer = controller ? setTimeout(function () { controller.abort(); }, 10000) : null;
+  if(!read && workbenchStartupBlocked)throw new Error('工作台初始化尚未完成，关键操作保持冻结；请使用刷新重新读取服务与能力，不会自动重放提交。');
+  const controller = new AbortController();
+  const timeoutMs = read ? 10000 : path==='/api/v1/projects' || /\/execution\/(?:daily-)?plans$/.test(path) ? 120000 : 30000;
+  const timeoutError = new Error(read ? '读取超时，当前状态尚未确认；请重新读取原记录。' : '提交超时，结果尚未确认；请读取原事项或原方案核对，不要重复授权。');
+  timeoutError.code='request_timeout';timeoutError.uncertain=!read;
+  let timedOut=false,timer;
+  const deadline=new Promise((_,reject)=>{timer=setTimeout(()=>{timedOut=true;reject(timeoutError);controller.abort();},timeoutMs);});
   try {
-    const response = await fetch(path, Object.assign({ cache: "no-store" },
-      controller ? { signal: controller.signal } : {}, options));
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.message || body.error || path);
-    return body;
+    const request=Object.assign({ cache: "no-store" },options,{signal:controller.signal});
+    if(workbenchServiceIdentity) {
+      const headers=typeof Headers==='function' ? new Headers(request.headers || {}) : {...request.headers};
+      if(typeof headers.set==='function'){headers.set('X-Workbench-Expected-Service-Instance',workbenchServiceIdentity.service);headers.set('X-Workbench-Expected-Runtime-Instance',workbenchServiceIdentity.runtime);}
+      else Object.assign(headers,{'X-Workbench-Expected-Service-Instance':workbenchServiceIdentity.service,'X-Workbench-Expected-Runtime-Instance':workbenchServiceIdentity.runtime});
+      request.headers=headers;
+    }
+    const operation=(async()=>{
+      const response = await fetch(path, request);
+      if(timedOut)throw timeoutError;
+      checkWorkbenchService(response);
+      const body = await response.json();
+      if(timedOut)throw timeoutError;
+      if(workbenchServiceFrozen)throw new Error('工作台服务身份已变化，操作保持冻结；请重新载入核对');
+      if(body?.error==='instance_changed'){freezeWorkbenchService(body.message || '工作台服务实例已变化');throw new Error(body.message || '服务身份不一致');}
+      if (!response.ok) {
+        const error = new Error(body.message || body.error || path);
+        error.status = response.status;
+        error.body = body;
+        error.code = body.error;
+        if (body.error === 'course_verification_not_ready') {
+          error.verification = body.verification;
+        }
+        throw error;
+      }
+      return body;
+    })();
+    return await Promise.race([operation,deadline]);
   } finally {
-    if (timer !== null) clearTimeout(timer);
+    clearTimeout(timer);
   }
 }
 
@@ -306,7 +387,6 @@ function actorName() {
     throw new Error(!name ? '请先填写你的姓名或课堂昵称，再开始交付。' :
       name.length > 80 ? '署名请控制在 80 个字以内。' : '不能使用 agent: 开头的执行器署名，请填写你的姓名或课堂昵称。');
   }
-  try { localStorage.setItem('workbench-actor', name); } catch (_) { /* Browsing without storage remains usable. */ }
   show('identity-status', '已使用你的署名：' + name + '。决定会与证据一起保存。');
   return name;
 }
@@ -377,7 +457,22 @@ function renderTasks(items, selectedTaskId) {
   });
 }
 
-function renderCases(cases) {
+function evalFailureMessage(item) {
+  const error = item.error;
+  const detail = error && typeof error === 'object' ? error.message : error;
+  const evidence = item.evidence;
+  return String(detail || (evidence && typeof evidence === 'object' ? JSON.stringify(evidence) : evidence) || item.message || '原报告未提供具体原因，请查看检查记录。');
+}
+
+function courseEvalDiagnostics(evalView) {
+  if (Array.isArray(evalView.diagnostics) && evalView.diagnostics.length) return evalView.diagnostics;
+  return (evalView.results || []).filter(function(item) { return item && !item.passed; }).map(function(item) {
+    return {name: item.name, label: item.label || item.name, message: evalFailureMessage(item),
+      action: '先核对原始原因和目标目录；配置问题先补齐环境，代码问题修复后在原任务再跑复验。复验只检查，不会自动修改代码。'};
+  });
+}
+
+function renderCases(cases, results, diagnostics, checkLabels) {
   const list = document.getElementById("eval-cases");
   list.innerHTML = "";
   if (!cases || !cases.length) {
@@ -387,11 +482,35 @@ function renderCases(cases) {
     return;
   }
   cases.forEach(function (item) {
+    const diagnostic = (diagnostics || []).find(function(row) { return row.name === item.name; });
+    const original = (results || []).find(function(row) { return row.name === item.name; });
+    const mapped = checkLabels && Object.prototype.hasOwnProperty.call(checkLabels, item.name) ? checkLabels[item.name] : null;
+    const label = (typeof mapped === 'string' && mapped) || (diagnostic && diagnostic.label) ||
+      item.label || (original && original.label) || item.name || '未命名';
     const row = document.createElement("li");
     row.className = item.passed ? "case-pass" : "case-fail";
-    row.textContent = (item.passed ? "通过" : "失败") + " · " + (item.name || "未命名") + (item.level ? " · " + item.level : "");
+    row.textContent = (item.passed ? "通过" : "失败") + " · " +
+      label + (item.name && label !== item.name ? '（' + item.name + '）' : '') +
+      (item.level ? " · " + item.level : "") +
+      (!item.passed && original ? '\n原始原因：' + evalFailureMessage(original) : '');
     list.appendChild(row);
   });
+}
+
+function renderEvalDiagnostics(evalView) {
+  const diagnostics = courseEvalDiagnostics(evalView);
+  const list = document.getElementById('eval-diagnostics');
+  list.innerHTML = '';
+  diagnostics.forEach(function(item) {
+    const row = document.createElement('li');
+    row.textContent = (item.kind === 'environment' ? '配置问题' : '未通过') + ' · ' + (item.label || item.name || '检查') +
+      '\n原因：' + item.message + '\n处理：' + (item.action || '对照原报告修复后再在原任务复验。');
+    list.appendChild(row);
+  });
+  const target = evalView.verification_target;
+  show('eval-target', target ? '本报告检查目录：' + [target.workbench_root && '工作台 ' + target.workbench_root,
+    target.product_root && 'FlowERP ' + target.product_root].filter(Boolean).join('；') : '');
+  return diagnostics;
 }
 
 function renderControlSurface(surface) {
@@ -434,31 +553,14 @@ function renderActions(detail) {
     verify.hidden = true;
     if (!(detail.events || []).some(function(event){return event.detail === '课程红绿差分判定已完成' && event.evidence && event.evidence.accepted === true;})) approve.hidden = true;
   }
-  [verify, approve, reject].forEach(function (button) { button.disabled = false; });
+  [verify, approve, reject].forEach(function (button) { button.disabled = workbenchWritesFrozen(); });
   verify.onclick = function () { runVerify(detail.task_id); };
   approve.onclick = function () { runReview(detail.task_id, "approve"); };
   reject.onclick = function () { runReview(detail.task_id, "reject"); };
 }
 
 async function preparePreview(taskId) {
-  const button = document.getElementById('prepare-preview');
-  button.disabled = true;
-  show('preview-status', '正在准备独立预览，必要时会等待上次运行释放数据，请稍候。');
-  try {
-    const result = await api('/api/v1/tasks/' + encodeURIComponent(taskId) + '/preview', {
-      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({actor:actorName()})
-    });
-    if (selectedTask !== taskId) return;
-    if (result.task_id !== taskId || !/^http:\/\/127\.0\.0\.1:\d+$/.test(result.url)) throw new Error('预览地址或任务编号不匹配');
-    const link = document.getElementById('preview-link');
-    link.href = result.url;
-    link.hidden = false;
-    show('preview-status', result.label + '。' + result.notice);
-  } catch(error) {
-    if (selectedTask === taskId) show('preview-status', '暂未打开预览：' + error.message);
-  } finally {
-    if (selectedTask === taskId) button.disabled = false;
-  }
+  return openPlatformPreview(taskId,'task');
 }
 
 function renderEvidence(detail) {
@@ -485,8 +587,11 @@ function renderEvidence(detail) {
   show("evidence-spec-summary", (spec.goal || spec.title || "尚无任务约定").split("\n\n")[0]);
   show("evidence-scope", ((detail.policy && detail.policy.write_scope) || []).join("、") || "未声明写集");
   const evalView = detail.eval || {};
+  const diagnostics = renderEvalDiagnostics(evalView);
   show("evidence-eval", evalView.available
-    ? (({pass:"检查通过",block:"检查未通过"}[evalView.decision] || "结果未知") + " · 阻断失败 " + (evalView.blocking_failed || 0) + " 项")
+    ? (({pass:"检查通过",block:"检查未通过"}[evalView.decision] || "结果未知") + " · 阻断失败 " + (evalView.blocking_failed || 0) + " 项" +
+      (diagnostics.length ? '\n' + (diagnostics[0].label || diagnostics[0].name) + '：' + diagnostics[0].message +
+        '\n' + (diagnostics[0].action || '修复后在原任务复验。') : ''))
     : "还没有 Eval 报告");
   const review = detail.review || {};
   show("evidence-review", review.reviewed_by
@@ -499,7 +604,7 @@ function renderEvidence(detail) {
     (detail.events || []).some(event=>event.detail === '课程红绿差分判定已完成' && event.evidence && event.evidence.accepted === true);
   document.getElementById('candidate-preview').hidden = !canPreview;
   document.getElementById('preview-link').hidden = true;
-  document.getElementById('prepare-preview').disabled = false;
+  document.getElementById('prepare-preview').disabled = workbenchWritesFrozen();
   document.getElementById('prepare-preview').onclick = function(){ preparePreview(detail.task_id); };
   show('preview-status', '');
   const stopped = ['failed', 'dead_letter'].includes((detail.status || {}).code);
@@ -510,7 +615,7 @@ function renderEvidence(detail) {
   show('role-workbench', controlReady ? 'Harness 四件套已有可核对闸门' : stopped ? '控制面有缺口，请先核对停止原因' : '正在装载 Harness 控制面');
   show("execution-summary", isCode ? "本次已授权 Codex 修改代码" : "本次仅复验，未调用 Codex");
   show("evidence-diff", files.length ? files.join("\n") : isCode ? "尚无已记录的文件改动，请结合执行事件核对。" : "本次不修改文件；自动检查结果不能证明完成了新功能。");
-  renderCases(evalView.cases);
+  renderCases(evalView.cases, evalView.results, diagnostics, evalView.check_labels);
   renderActions(detail);
   renderEvents(detail.events);
   renderV0Evidence(detail);
@@ -657,8 +762,109 @@ async function loadDetail(taskId, polling) {
 }
 
 async function showCourse(lesson) {
+  const version = ++courseContractReadVersion;
   if (!lesson) return;
-  renderContract(await api("/api/course/current?lesson=" + encodeURIComponent(lesson)));
+  try {
+    const course = await api("/api/course/current?lesson=" + encodeURIComponent(lesson));
+    if (version === courseContractReadVersion && document.getElementById('task-lesson').value === String(lesson)) renderContract(course);
+  } catch (error) {
+    if (version === courseContractReadVersion && document.getElementById('task-lesson').value === String(lesson)) throw error;
+  }
+}
+
+function courseVerificationReady() {
+  const state = courseVerificationState;
+  return !!state && state.context.ready === true && state.context.checks.length > 0 &&
+    state.lesson === document.getElementById('task-lesson').value &&
+    state.projectId === document.getElementById('verification-project').value;
+}
+
+function updateCourseVerificationSubmit() {
+  document.getElementById('task-submit').disabled = composerMode !== 'verify' ||
+    courseVerificationSubmitting || workbenchWritesFrozen() || !courseVerificationReady();
+}
+
+function courseVerificationList(id, entries) {
+  const list = document.getElementById(id);
+  list.innerHTML = '';
+  entries.forEach(function(text) {
+    const item = document.createElement('li');
+    item.textContent = text;
+    list.appendChild(item);
+  });
+}
+
+function renderCourseVerification(context, lesson, requestedProjectId) {
+  const select = document.getElementById('verification-project');
+  const checksProduct = context.checks.some(function(check) { return check.target === 'erp' || check.target === 'FlowERP'; });
+  select.innerHTML = '';
+  const automatic = document.createElement('option');
+  automatic.value = '';
+  automatic.textContent = !checksProduct ? '本讲固定检查不涉及 ERP 项目' : context.projects.length
+    ? '选择 ERP 项目（只有一个时自动采用）' : context.target.product_root ? '使用已配置的 FlowERP 项目' : '尚未配置 FlowERP 项目';
+  select.appendChild(automatic);
+  context.projects.forEach(function(project) {
+    const option = document.createElement('option');
+    option.value = String(project.id);
+    option.textContent = project.name + ' · ' + project.root_path;
+    select.appendChild(option);
+  });
+  const projectId = checksProduct ? String(context.target.project_id || requestedProjectId || '') : '';
+  select.value = projectId;
+  select.disabled = !checksProduct || context.projects.length === 0;
+  courseVerificationState = {lesson: lesson, projectId: projectId, context: context};
+  courseVerificationList('verification-checks', context.checks.map(function(check) {
+    return (check.label || check.name) + ' · ' + (check.target === 'erp' ? 'FlowERP' : check.target === 'workbench' ? '工作台' : check.target || '课程检查');
+  }));
+  show('verification-target', '工作台目录：' + (context.target.workbench_root || '尚未确认') +
+    '\nERP 目录：' + (checksProduct ? context.target.product_root || '尚未配置' : '本讲固定检查不涉及 ERP 源码') +
+    (projectId ? '\nERP 项目：' + projectId : ''));
+  courseVerificationList('verification-issues', context.issues.map(function(issue) {
+    return issue.message + (issue.action ? '。处理：' + issue.action : '');
+  }));
+  document.getElementById('verification-configure').hidden = context.issues.length === 0;
+  courseVerificationList('verification-limitations', context.limitations);
+  show('verification-status', context.message || (context.ready ? '检查条件已就绪。请核对条目与目标后开始。' : '检查条件尚未就绪。请先处理上面的配置问题。'));
+  show('task-submit-status', context.ready ? '只运行以上固定用例；通过后仍需具名验收。' : '尚未开始复验，也未创建失败任务。请补齐条件后重新核对。');
+  updateCourseVerificationSubmit();
+}
+
+async function refreshCourseVerification() {
+  const version = ++courseVerificationReadVersion;
+  const lesson = document.getElementById('task-lesson').value;
+  const projectId = document.getElementById('verification-project').value;
+  courseVerificationState = null;
+  updateCourseVerificationSubmit();
+  courseVerificationList('verification-checks', []);
+  courseVerificationList('verification-issues', []);
+  courseVerificationList('verification-limitations', []);
+  show('verification-target', '');
+  document.getElementById('verification-configure').hidden = true;
+  if (!lesson) {
+    show('verification-status', '请先选择讲次，再核对本次检查和目标项目。');
+    show('task-submit-status', '选择讲次并核对条件后，才能开始课程复验。');
+    return;
+  }
+  show('verification-status', '正在核对本讲固定用例、目标目录与运行条件…');
+  show('task-submit-status', '条件尚未读取完成，请等待核对结果。');
+  try {
+    const context = await api('/api/course/verification?lesson=' + encodeURIComponent(lesson) +
+      (projectId ? '&project_id=' + encodeURIComponent(projectId) : ''));
+    if (version !== courseVerificationReadVersion || lesson !== document.getElementById('task-lesson').value ||
+        projectId !== document.getElementById('verification-project').value) return;
+    if (!context || typeof context.ready !== 'boolean' || !Array.isArray(context.checks) ||
+        !context.target || !Array.isArray(context.projects) || !Array.isArray(context.limitations) || !Array.isArray(context.issues)) {
+      throw new Error('课程复验条件格式不完整');
+    }
+    renderCourseVerification(context, lesson, projectId);
+  } catch (error) {
+    if (version !== courseVerificationReadVersion || lesson !== document.getElementById('task-lesson').value ||
+        projectId !== document.getElementById('verification-project').value) return;
+    courseVerificationState = null;
+    updateCourseVerificationSubmit();
+    show('verification-status', '条件读取失败：' + String(error.message || error) + '。点击“重新核对条件”后再开始。');
+    show('task-submit-status', '未开始复验。旧的就绪结果已失效。');
+  }
 }
 
 async function submitTask(event) {
@@ -667,15 +873,29 @@ async function submitTask(event) {
   let actor;
   try { actor = actorName(); }
   catch(error) { show('task-submit-status', error.message); return; }
-  const request = document.getElementById("task-request").value.trim();
+  if (composerMode !== 'verify' || !courseVerificationReady()) {
+    updateCourseVerificationSubmit();
+    show('task-submit-status', '本讲检查与目标项目尚未核对就绪。请先处理提示，再点击“重新核对条件”。');
+    return;
+  }
+  const note = document.getElementById("task-request").value.trim();
+  if (note.length > 960) {
+    show('task-submit-status', '复验备注最多 960 字，请精简后再提交。原文已保留，不会自动截断。');
+    document.getElementById('task-request').focus();
+    return;
+  }
+  const request = 'L' + String(lesson).padStart(2, '0') + ' 课程复验' + (note ? '\n复验备注：' + note : '');
   const button = document.getElementById("task-submit");
   if (button.disabled) return;
   const refs = document.getElementById('task-business-refs').value.split(/[,，\n]/).map(function(ref){return ref.trim();}).filter(Boolean);
-  const payload = JSON.stringify({ lesson: Number(lesson), actor: actor, request: request, business_refs: refs });
+  const payload = JSON.stringify({ lesson: Number(lesson), actor: actor, request: request, business_refs: refs,
+    project_id: courseVerificationState.projectId || null,
+    verification_key: courseVerificationState.context.verification_key });
   if (!pendingSubmission || pendingSubmission.payload !== payload) {
     pendingSubmission = {payload: payload, key: crypto.randomUUID()};
   }
-  button.disabled = true;
+  courseVerificationSubmitting = true;
+  updateCourseVerificationSubmit();
   show("task-submit-status", "正在提交，受理后即可查看检查进度…");
   try {
     const created = await api("/api/v1/delivery/requests", {
@@ -692,9 +912,27 @@ async function submitTask(event) {
     try { await refreshTasks(created.task_id); }
     catch (error) { show("data-status", "任务 " + created.task_id + " 已受理，但进度暂不可读。请刷新核对，无需重新提交。"); }
   } catch (error) {
-    show("task-submit-status", "未确认受理结果：" + String(error.message || error) + "。重试同一内容会复用本次提交编号。");
+    if (error.code === 'course_verification_not_ready') {
+      ++courseVerificationReadVersion;
+      courseVerificationState = null;
+      pendingSubmission = null;
+      courseVerificationList('verification-checks', []);
+      show('verification-target', '');
+      const issues = error.verification && Array.isArray(error.verification.issues) ? error.verification.issues : [];
+      courseVerificationList('verification-issues', issues.length ? issues.map(function(issue) {
+        return issue.message + (issue.action ? '。处理：' + issue.action : '');
+      }) : [String(error.message || error)]);
+      document.getElementById('verification-configure').hidden = issues.length === 0;
+      show('verification-status', '复验条件已变化：' + String(error.message || error) + '。请点击“重新核对条件”，重新确认检查对象。');
+      show('task-submit-status', '尚未创建任务。请补齐或重新核对条件后再提交。');
+    } else if (error.status) {
+      show('task-submit-status', '服务器未接受本次提交：' + String(error.message || error) + '。请先处理提示后再提交。');
+    } else {
+      show("task-submit-status", "未确认受理结果：" + String(error.message || error) + "。重试同一内容会复用本次提交编号。");
+    }
   } finally {
-    button.disabled = false;
+    courseVerificationSubmitting = false;
+    updateCourseVerificationSubmit();
   }
 }
 
@@ -713,7 +951,7 @@ async function runVerify(taskId) {
   } catch (error) {
     show("action-status", "复验失败：" + String(error.message || error));
   } finally {
-    button.disabled = false;
+    button.disabled = workbenchWritesFrozen();
   }
 }
 
@@ -747,6 +985,55 @@ function readCurrentContract() {
   card.scrollIntoView({behavior:'smooth', block:'center'});
   card.focus({preventScroll:true});
 }
+function refreshWorkbenchStartup() {
+  if(workbenchServiceFrozen)return Promise.resolve(false);
+  if(workbenchStartupReady)return Promise.resolve(true);
+  if(workbenchStartupPending)return workbenchStartupPending;
+  workbenchStartupBlocked=true;
+  const pending=(async()=>{
+    try {
+      const health = await api("/api/health");
+      if(health.surface!=="workbench")throw new Error('当前端口不是本仓库工作台，请核对服务身份与启动端口');
+      if(typeof WorkbenchDrafts!=='undefined') {
+        WorkbenchDrafts.init(health.runtime_instance || health.runtime);
+        document.getElementById('clear-local-drafts').onclick=()=>{WorkbenchDrafts.clearAll();if(typeof WorkbenchMutationJournal!=='undefined')WorkbenchMutationJournal.clear();};
+        if(typeof trackInitiativeDraft==='function')trackInitiativeDraft(currentInitiative);
+      }
+      if(typeof initWorkbenchBackups==='function')initWorkbenchBackups();
+      const capabilities = await api('/api/v1/delivery/capabilities');
+      const readiness = capabilities.code_readiness;
+      webCodeAvailable = !!capabilities.web_code_execution && (!readiness || readiness.ready === true);
+      document.getElementById('mode-codex').disabled = true;
+      courseCodeReadinessMessage = readiness ? readiness.message : webCodeAvailable ? '执行方案经过你的确认后，才会启动 Codex。' : '当前工作台仅开放复验，代码执行入口尚未启用。';
+      document.getElementById('execution-setup').hidden = webCodeAvailable;
+      chooseComposerMode('verify');
+      if (health.erp_url) document.getElementById("erp-link").href = health.erp_url;
+      const thesis = health.thesis || {};
+      show("thesis", [thesis.workbench, thesis.flowerp, thesis.codex].filter(Boolean).join(" · "));
+      renderContract(await api("/api/course/current"));
+      await refreshTasks();
+      renderUpgrade(await api("/api/cockpit/upgrade"));
+      if(workbenchServiceFrozen)return false;
+      workbenchStartupReady=true;workbenchStartupBlocked=false;
+      document.getElementById('mode-codex').disabled=!webCodeAvailable;
+      ['save-initiative','decide-initiative'].forEach(id=>document.getElementById(id).disabled=false);
+      updateCourseVerificationSubmit();
+      document.getElementById('prepare-code').disabled=!webCodeAvailable;
+      if(typeof projectPending!=='undefined' && typeof projectRegistrationAvailable!=='undefined')document.getElementById('project-register').disabled=projectPending || !projectRegistrationAvailable;
+      const currentDetail=taskCache.find(item=>item.task_id===selectedTask);
+      if(currentDetail && !document.getElementById('task-detail').hidden){renderActions(currentDetail);document.getElementById('prepare-preview').disabled=false;}
+      show('data-status','服务与能力已重新核对。提交、授权和验收仍需你主动操作。');
+      return true;
+    }catch(error){
+      workbenchStartupReady=false;
+      document.getElementById('mode-codex').disabled=true;
+      if(!workbenchServiceFrozen)show('data-status','初始化读取未完成，关键操作保持冻结：'+error.message+'。服务恢复后可点击刷新重新读取；不会自动提交、确认或授权。');
+      show('lesson-title',String(error.message || error));
+      return false;
+    }
+  })().finally(()=>{if(workbenchStartupPending===pending)workbenchStartupPending=null;});
+  workbenchStartupPending=pending;return pending;
+}
 async function boot() {
   document.getElementById('back-to-tasks').onclick = function () {
     document.getElementById('delivery-task-browser').scrollIntoView({behavior:'smooth', block:'start'});
@@ -757,8 +1044,8 @@ async function boot() {
   try { document.getElementById('execution-recovery').hidden = !localStorage.getItem('workbench-pending-plan'); } catch (_) { /* Storage is optional. */ }
   document.getElementById('resume-execution').onclick = resumeExecution;
   const identity = document.getElementById('task-actor');
-  try { identity.value = localStorage.getItem('workbench-actor') || ''; } catch (_) { /* Storage is optional. */ }
-  if (identity.value.trim()) show('identity-status', '当前署名：' + identity.value.trim() + '。确认与验收会记录此署名。');
+  identity.value = '';
+  try { localStorage.removeItem('workbench-actor'); } catch (_) { /* Storage is optional. */ }
   identity.addEventListener('change', function() {
     try { localStorage.removeItem('workbench-actor'); } catch (_) { /* Storage is optional. */ }
     try { actorName(); } catch(error) { show('identity-status', error.message); }
@@ -803,38 +1090,36 @@ async function boot() {
   document.getElementById("close-composer").onclick = function () { document.getElementById("task-composer").close(); };
   document.querySelector(".brand").onclick = function (event) { event.preventDefault(); workspaceView("overview"); };
   document.getElementById("task-form").addEventListener("submit", submitTask);
-  document.getElementById("refresh-tasks").onclick = function () {
-    if(!document.getElementById("view-overview").hidden)refreshProjectHome();
-    if(!document.getElementById("view-decision").hidden){refreshInitiatives();refreshInitiativeWork();}
-    refreshTasks(selectedTask).catch(function () { /* Error is already visible. */ });
+  document.getElementById('verification-project').addEventListener('change', refreshCourseVerification);
+  document.getElementById('verification-refresh').onclick = refreshCourseVerification;
+  document.getElementById('verification-configure').onclick = function() {
+    document.getElementById('task-composer').close();
+    workspaceView('overview');
+    document.getElementById('open-project-registration').click();
   };
-  try {
-    const health = await api("/api/health");
-    const capabilities = await api('/api/v1/delivery/capabilities');
-    const readiness = capabilities.code_readiness;
-    webCodeAvailable = !!capabilities.web_code_execution && (!readiness || readiness.ready === true);
-    document.getElementById('mode-codex').disabled = !webCodeAvailable;
-    show('mode-help', readiness ? readiness.message : webCodeAvailable ? '执行方案经过你的确认后，才会启动 Codex。' : '当前工作台仅开放复验，代码执行入口尚未启用。');
-    document.getElementById('execution-setup').hidden = webCodeAvailable;
-    chooseComposerMode('verify');
-    if (health.erp_url) document.getElementById("erp-link").href = health.erp_url;
-    const thesis = health.thesis || {};
-    show("thesis", [thesis.workbench, thesis.flowerp, thesis.codex].filter(Boolean).join(" · "));
-    const course = await api("/api/course/current");
-    renderContract(course);
-    await refreshTasks();
-    renderUpgrade(await api("/api/cockpit/upgrade"));
-    document.getElementById("task-lesson").addEventListener("change", function () {
-      document.getElementById('code-bootstrap-field').hidden = this.value !== '4';
-      showCourse(this.value).catch(function (error) {
-        show("task-submit-status", "合同读取失败：" + String(error.message || error));
-      });
+  let refreshPending=null;
+  document.getElementById("refresh-tasks").onclick = function () {
+    if(refreshPending)return refreshPending;
+    const initialized=workbenchStartupReady;
+    const pending=(async()=>{
+      if(!await refreshWorkbenchStartup())return;
+      const reads=[];
+      if(!document.getElementById("view-overview").hidden)reads.push(refreshProjectHome());
+      if(!document.getElementById("view-decision").hidden)reads.push(refreshInitiatives(),refreshInitiativeWork());
+      // Startup already loaded task evidence; concurrent refreshes reuse it.
+      if(initialized)reads.push(refreshTasks(selectedTask).catch(function () { /* Error is already visible. */ }));
+      await Promise.all(reads);
+    })().finally(()=>{if(refreshPending===pending)refreshPending=null;});
+    refreshPending=pending;return pending;
+  };
+  document.getElementById("task-lesson").addEventListener("change", function () {
+    document.getElementById('code-bootstrap-field').hidden = this.value !== '4';
+    refreshCourseVerification();
+    showCourse(this.value).catch(function (error) {
+      show("task-submit-status", "合同读取失败：" + String(error.message || error));
     });
-  } catch (error) {
-    show("thesis", "工作台服务未启动。请运行 python -X utf8 -m workbench.cli serve-workbench");
-    show("lesson-title", String(error.message || error));
-    document.getElementById("task-list").textContent = "无法读取任务。确认当前打开的是工作台端口 :8001，而不是 FlowERP :8000 或可选 Harness :8010。";
-  }
+  });
+  await refreshWorkbenchStartup();
 }
 
 boot();

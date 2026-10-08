@@ -109,7 +109,8 @@ class CodexExecutionRunner:
     Codex exits. Human review remains a separate workflow state.
     """
 
-    _process_lock = threading.Lock()
+    _workspace_locks = {}
+    _workspace_locks_guard = threading.Lock()
 
     def __init__(
         self,
@@ -185,7 +186,11 @@ class CodexExecutionRunner:
         timeout = int(task.get("execution_timeout_seconds", 900))
         if not 30 <= timeout <= 3600:
             raise ValueError("execution_timeout_seconds 必须在 30..3600")
-        with self._process_lock, self._workspace_lock(timeout=min(timeout, 60)):
+        timeout = min(timeout, max(1, int(task.get('_runtime_timeout_seconds', timeout))))
+        key = os.path.normcase(str(self.workspace_root))
+        with self._workspace_locks_guard:
+            process_lock = self._workspace_locks.setdefault(key, threading.Lock())
+        with process_lock, self._workspace_lock(timeout=min(timeout, 60)):
             return self._run_codex(task, scopes, timeout, on_codex_line=on_codex_line)
 
     def _run_codex(
@@ -224,9 +229,31 @@ class CodexExecutionRunner:
         timed_out = False
         launch_error = ""
         if self.process_runner is subprocess.run:
-            completed = self._run_codex_streaming(
-                command, prompt, timeout, on_codex_line or (lambda line: None), started,
-            )
+            try:
+                completed = self._run_codex_streaming(
+                    command, prompt, timeout, on_codex_line or (lambda line: None), started,
+                )
+            except BaseException as error:
+                # No CompletedProcess exists: record the failure without inventing
+                # an exit code or converting a cleanup/callback failure to success.
+                receipt = {'attempt_id': attempt_id, 'command': command,
+                    'workspace': str(self.workspace_root), 'status': 'failed', 'success': False,
+                    'returncode': None, 'process_result_available': False, 'timed_out': None,
+                    'exception_type': type(error).__name__, 'error': str(error),
+                    'notes': list(getattr(error, '__notes__', [])),
+                    'recorded_at': datetime.now(timezone.utc).isoformat(),
+                    'duration_ms': int((time.monotonic() - started) * 1000)}
+                try:
+                    from .file_io import atomic_write_text
+                    atomic_write_text(run_dir / 'process.json', json.dumps(receipt, ensure_ascii=False))
+                except Exception as receipt_error:
+                    message = '失败进程回执保存失败：' + str(receipt_error)
+                    if hasattr(error, 'add_note'):
+                        error.add_note(message)
+                    else:
+                        import logging
+                        logging.getLogger(__name__).error('%s；原错误：%s', message, error)
+                raise
             timed_out = completed.returncode == 124
             if timed_out:
                 launch_error = f"Codex 执行超过 {timeout} 秒"
@@ -320,45 +347,86 @@ class CodexExecutionRunner:
         timeout: int,
         on_codex_line: CodexLineCallback,
         started: float,
+        *,
+        binary_stdout: bool = False,
     ) -> subprocess.CompletedProcess:
-        stdout_parts: list[str] = []
+        stdout_parts = []
         stderr_parts: list[str] = []
         lines = queue.Queue()
+        from .execution_control import cancelled
+        control = getattr(self, 'control_event', None)
+        if cancelled() or (control is not None and control.is_set()):
+            return subprocess.CompletedProcess(command, 130, stdout=b'' if binary_stdout else '', stderr='任务已取消，未启动进程')
         try:
             from .codex_options import headless_environment
             process, owner, prefix = spawn_owned_process(command, self.workspace_root, env=headless_environment())
         except OSError as exc:
-            return subprocess.CompletedProcess(command, 127, stdout="", stderr=str(exc))
+            return subprocess.CompletedProcess(command, 127, stdout=b'' if binary_stdout else '', stderr=str(exc))
+
+        stream_errors = []
 
         def drain(stream, label):
             try:
-                for line in stream:
+                source = stream.buffer if label == "out" and binary_stdout else stream
+                for line in source:
                     lines.put((label, line))
+            except Exception as error:
+                stream_errors.append(error)
             finally:
-                stream.close()
+                try:
+                    stream.close()
+                except Exception as error:
+                    stream_errors.append(error)
                 lines.put((label, None))
 
         def feed():
             try:
                 process.stdin.write(prefix + prompt)
-                process.stdin.close()
-            except (BrokenPipeError, OSError):
+            except BrokenPipeError:
                 pass
+            except OSError as error:
+                stream_errors.append(error)
+            finally:
+                try:
+                    process.stdin.close()
+                except BrokenPipeError:
+                    pass
+                except Exception as error:
+                    stream_errors.append(error)
 
-        readers = [threading.Thread(target=drain, args=(process.stdout, "out"), daemon=True),
-                   threading.Thread(target=drain, args=(process.stderr, "err"), daemon=True)]
-        writer = threading.Thread(target=feed, daemon=True)
-        for thread in readers:
-            thread.start()
-        writer.start()
+        threads, readers = [], {}
+        writer = None
         deadline = started + timeout
         ended = set()
         timed_out = False
         was_cancelled = False
+        failure = None
+        owner_closed = False
         try:
-            while len(ended) < 2 or process.poll() is None:
+            for label, stream in (("out", process.stdout), ("err", process.stderr)):
+                thread = threading.Thread(target=drain, args=(stream, label), daemon=True)
+                threads.append(thread)
+                readers[label] = thread
+                thread.start()
+            writer = threading.Thread(target=feed, daemon=True)
+            threads.append(writer)
+            writer.start()
+            while True:
+                process_finished = process.poll() is not None
+                if process_finished and owner and not owner_closed:
+                    # Descendants can retain stdout/stderr after the guard exits.
+                    # Close their Job before waiting for the readers to reach EOF.
+                    try:
+                        owner.close()
+                        owner_closed = True
+                    except Exception as error:
+                        stream_errors.append(error)
+                        break
+                if process_finished and len(ended) == 2:
+                    break
                 from .execution_control import cancelled
-                if cancelled():
+                control = getattr(self, 'control_event', None)
+                if cancelled() or (control is not None and control.is_set()):
                     stderr_parts.append('任务已取消')
                     was_cancelled = True
                     break
@@ -374,25 +442,62 @@ class CodexExecutionRunner:
                     ended.add(channel)
                 elif channel == "out":
                     stdout_parts.append(line)
-                    on_codex_line(line.rstrip("\n"))
+                    if not binary_stdout:
+                        on_codex_line(line.rstrip("\n"))
                 else:
                     stderr_parts.append(line)
+        except BaseException as error:
+            failure = error
+            raise
         finally:
-            if owner:
-                owner.close()
-            if process.poll() is None:
-                process.kill()
-            process.wait(timeout=5)
-            for thread in [*readers, writer]:
-                thread.join(timeout=1)
+            cleanup_errors = []
+            if owner and not owner_closed:
+                # Keep the same owner for one cleanup retry. Even a recovered
+                # close error rejects the result; it cannot become valid evidence.
+                for attempt in range(2):
+                    try:
+                        owner.close()
+                        break
+                    except Exception as error:
+                        cleanup_errors.append(error)
+            try:
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=5)
+            except Exception as error:
+                cleanup_errors.append(error)
+            finish_by = time.monotonic() + 5
+            for thread in threads:
+                if thread.ident is not None:
+                    try:
+                        thread.join(timeout=max(0, finish_by - time.monotonic()))
+                    except Exception as error:
+                        cleanup_errors.append(error)
+            if any(thread.is_alive() for thread in threads):
+                cleanup_errors.append(RuntimeError('进程流线程尚未收尾'))
+            for label, stream in (("out", process.stdout), ("err", process.stderr), ("in", process.stdin)):
+                thread = writer if label == "in" else readers.get(label)
+                if not stream.closed and (thread is None or not thread.is_alive()):
+                    try:
+                        stream.close()
+                    except Exception as error:
+                        cleanup_errors.append(error)
             # Preserve output already drained when timeout or a callback interrupted us.
             while not lines.empty():
                 channel, line = lines.get_nowait()
                 if line is not None:
                     (stdout_parts if channel == "out" else stderr_parts).append(line)
+            errors = cleanup_errors + stream_errors
+            if errors:
+                message = '受控进程收尾失败：' + '; '.join(map(str, errors))
+                if failure is not None:
+                    if hasattr(failure, 'add_note'):
+                        failure.add_note(message)
+                else:
+                    raise RuntimeError(message) from errors[0]
         return subprocess.CompletedProcess(
             command, 130 if was_cancelled else 124 if timed_out else int(process.returncode or 0),
-            stdout="".join(stdout_parts), stderr="".join(stderr_parts),
+            stdout=b"".join(stdout_parts) if binary_stdout else "".join(stdout_parts), stderr="".join(stderr_parts),
         )
 
     def _snapshot(self, *, strict=False) -> dict[str, _FileState]:
@@ -531,7 +636,7 @@ class CodexExecutionRunner:
             "write_scope": scopes,
         }
         return (
-            "你是 FlowERP 研发交付执行器。读取仓库 AGENTS.md 并完成下面的任务。\n"
+            "你是当前登记项目的研发交付执行器。读取仓库 AGENTS.md 并完成下面的任务。\n"
             "必须先理解 Spec，再做最小代码修改，再运行与改动相关的测试。\n"
             f"只允许修改这些相对路径：{', '.join(scopes)}。不得修改其他路径。\n"
             "不得直接写入 .runtime、.tmp、.git、.codex、.env、现有运行数据库、密钥或凭据文件；"
@@ -545,7 +650,10 @@ class CodexExecutionRunner:
 
     @contextmanager
     def _workspace_lock(self, timeout: int) -> Iterator[None]:
-        lock_path = self.runtime_dir / "delivery-code.lock"
+        # Different isolated candidates can execute concurrently. The same
+        # candidate keeps a process-independent lease across runtime directories.
+        key = hashlib.sha256(os.path.normcase(str(self.workspace_root)).encode()).hexdigest()[:24]
+        lock_path = self.workspace_root.parent / ('.delivery-code-' + key + '.lock')
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         handle = lock_path.open("a+b")
         if handle.tell() == 0:

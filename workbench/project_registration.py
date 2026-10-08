@@ -60,6 +60,9 @@ class ProjectRegistration:
         return value
 
     def add(self, body):
+        from .project_configuration import configuration, ProjectConfiguration
+        if 'preview_config' in body or 'deployment_profiles' in body:
+            configuration(body.get('preview_config'), body.get('deployment_profiles', []))
         kind = body.get('source_type', 'local')
         if kind not in {'local', 'git'}:
             raise ValueError('请选择本地目录或 Git 链接')
@@ -68,7 +71,8 @@ class ProjectRegistration:
             raise ValueError('请填写项目名称（最多 120 字）')
         if not isinstance(location, str) or not location.strip() or not Path(location).is_absolute():
             raise ValueError('请填写本地目录的绝对路径')
-        root = Path(location.strip()).resolve()
+        # Reject internal source before clone/init can create files or Git metadata.
+        root = self.projects.validate_root_source(location.strip())
         if root == root.parent:
             raise ValueError('请使用具体项目目录，不能将磁盘根目录作为项目')
         command = self.command(body.get('eval_command'))
@@ -100,12 +104,18 @@ class ProjectRegistration:
             if top != root:
                 raise ValueError('请使用独立 Git 仓库的根目录')
             project = self.projects.create(name, root, command, allow_pending_eval=True)
+            if 'preview_config' in body or 'deployment_profiles' in body:
+                ProjectConfiguration(self.projects).save(project['id'], {**body, 'expected_configuration_revision': 0}, body.get('actor', 'project-registration'))
+                project = self.projects.get(project['id'])
             if body.get('make_default') is True:
                 self.projects.set_default(project['id'])
             return project
 
     def configure(self, project_id, body):
-        command = self.command(body.get('eval_command'))
+        command = self.command(body.get('eval_command', self.projects.get(project_id)['eval_command']))
+        if 'preview_config' in body or 'deployment_profiles' in body:
+            from .project_configuration import ProjectConfiguration
+            ProjectConfiguration(self.projects).save(project_id, body, body.get('actor', 'project-settings'))
         self.projects.configure(project_id, command)
         if body.get('make_default') is True:
             self.projects.set_default(project_id)

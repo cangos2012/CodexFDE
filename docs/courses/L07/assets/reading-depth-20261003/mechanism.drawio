@@ -1,0 +1,50 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="drawio" version="26.0.0">
+  <diagram id="L07" name="重入跳过留下怎样的证据空档">
+    <mxGraphModel grid="1" gridSize="10" page="1" pageScale="1" pageWidth="1500" pageHeight="880" background="#ffffff">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="heading" value="L07｜重入跳过留下怎样的证据空档" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontColor=#17252b;spacing=0;fontSize=32;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="30" width="1420" height="55" />
+        </mxCell>
+        <mxCell id="question" value="能够结束，为什么不等于最新版本已通过？" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontColor=#17252b;spacing=0;fontSize=23;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="100" width="1420" height="45" />
+        </mxCell>
+        <mxCell id="step-0" value="&lt;b&gt;01 V2真实事件发现失败&lt;/b&gt;&lt;br&gt;&lt;br&gt;Stop调用原检查：预期&lt;br&gt;12000分，实际5000分，反&lt;br&gt;馈要求续跑。" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;fontFamily=Microsoft YaHei;fontColor=#17252b;fontSize=22;spacing=18;strokeWidth=2;fillColor=#edf5fa;strokeColor=#517b94;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="190" width="310" height="240" />
+        </mxCell>
+        <mxCell id="step-1" value="&lt;b&gt;02 续跑修改产生V3&lt;/b&gt;&lt;br&gt;&lt;br&gt;文件已改变，但V2红报告&lt;br&gt;不能判断V3是否正确。" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;fontFamily=Microsoft YaHei;fontColor=#17252b;fontSize=22;spacing=18;strokeWidth=2;fillColor=#edf5fa;strokeColor=#517b94;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="410" y="190" width="310" height="240" />
+        </mxCell>
+        <mxCell id="edge-1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#517b94;strokeWidth=2;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="step-0" target="step-1">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="step-2" value="&lt;b&gt;03 重入跳过检查&lt;/b&gt;&lt;br&gt;&lt;br&gt;stop_hook_active时不调&lt;br&gt;用Harness；本次没有新增&lt;br&gt;质量结论。" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;fontFamily=Microsoft YaHei;fontColor=#17252b;fontSize=22;spacing=18;strokeWidth=2;fillColor=#edf5fa;strokeColor=#517b94;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="780" y="190" width="310" height="240" />
+        </mxCell>
+        <mxCell id="edge-2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#517b94;strokeWidth=2;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="step-1" target="step-2">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="step-3" value="&lt;b&gt;04 显式复验最终V3&lt;/b&gt;&lt;br&gt;&lt;br&gt;在V3实际目录运行原检查，&lt;br&gt;保存金额与完整状态的新报&lt;br&gt;告。" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;fontFamily=Microsoft YaHei;fontColor=#17252b;fontSize=22;spacing=18;strokeWidth=2;fillColor=#edf5fa;strokeColor=#517b94;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1150" y="190" width="310" height="240" />
+        </mxCell>
+        <mxCell id="edge-3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#517b94;strokeWidth=2;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="step-2" target="step-3">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="counterexample" value="&lt;b&gt;处理器退出0却未检查&lt;/b&gt;&lt;br&gt;&lt;br&gt;跳过分支可以正常返回；harness_call_count为0不表&lt;br&gt;示业务通过。" style="rounded=0;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontFamily=Microsoft YaHei;fontColor=#17252b;fontSize=23;spacing=20;strokeWidth=2;fillColor=#fff0ef;strokeColor=#b7625b;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="500" width="680" height="180" />
+        </mxCell>
+        <mxCell id="judgment" value="&lt;b&gt;检查必须覆盖最后修改&lt;/b&gt;&lt;br&gt;&lt;br&gt;核对最终版本、加载路径和报告来源；检查后再改需再次&lt;br&gt;复验。" style="rounded=0;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontFamily=Microsoft YaHei;fontColor=#17252b;fontSize=23;spacing=20;strokeWidth=2;fillColor=#eef7f1;strokeColor=#56846a;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="780" y="500" width="680" height="180" />
+        </mxCell>
+        <mxCell id="transfer" value="&lt;b&gt;发送前检查最终收件人&lt;/b&gt;　模拟邮件的收件人若又改变，发送前须重新验证最终对象。" style="rounded=0;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontFamily=Microsoft YaHei;fontColor=#17252b;fontSize=23;spacing=20;strokeWidth=2;fillColor=#f5f5f5;strokeColor=#788186;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="740" width="1420" height="95" />
+        </mxCell>
+        <mxCell id="legend" value="蓝色：机制步骤　　红色：错误推断或反例　　绿色：判断条件　　灰色：迁移　｜　教学示意" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontColor=#17252b;spacing=0;fontSize=18;fontColor=#526168;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="850" width="1420" height="35" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

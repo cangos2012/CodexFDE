@@ -8,7 +8,9 @@ import zipfile
 from pathlib import Path
 
 from tests.test_course_outline_alignment import schedule_titles
-from tests.course_assets import published_docs
+from tests.course_assets import (has_lesson_marker, local_slide_decks,
+                                normalized_slide_text, presentation_slide_texts,
+                                published_docs)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,22 +37,19 @@ def normalized(text: str) -> str:
 
 
 class CourseBlueprintTests(unittest.TestCase):
-    def test_blueprint_has_contiguous_pages_for_each_lesson(self) -> None:
+    def test_blueprint_connects_teacher_design_to_the_authoritative_outline(self) -> None:
         body = BLUEPRINT.read_text(encoding="utf-8")
-        starts = list(re.finditer(r"^## L(\d{2})｜(.+)$", body, re.MULTILINE))
-        self.assertEqual(16, len(starts))
-        for index, match in enumerate(starts):
-            end = starts[index + 1].start() if index + 1 < len(starts) else len(body)
-            section = body[match.end():end]
-            pages = re.findall(r"^\|\s*(\d{1,2})\s*\|\s*(\d{1,2}:\d{2})\s*\|", section, re.MULTILINE)
-            with self.subTest(lesson=match.group(1)):
-                self.assertTrue(pages, "每讲必须有逐页安排")
-                self.assertEqual([str(i) for i in range(1, len(pages) + 1)], [page for page, _time in pages])
-                self.assertEqual("0:00", pages[0][1])
-                self.assertIn("课程大纲四项合同", section)
-                self.assertRegex(section, r"一手来源（核验：\d{4}-\d{2}-\d{2}）")
+        self.assertRegex(body, r"教师|备课")
+        self.assertRegex(body, r"教学活动|学生参与的活动")
+        self.assertRegex(body, r"评价证据|教师核对的直接证据")
+        self.assertIn("试讲", body)
+        self.assertRegex(body, r"\]\(\.\./课程大纲-Codex-FDE行动营-个人研发自动化工作台\.md(?:#[^)]*)?\)")
+        self.assertRegex(body, r"\]\(\.\./README\.md(?:#[^)]*)?\)")
+        for number in range(1, 7):
+            with self.subTest(objective=number):
+                self.assertIn(f"CLO-{number}", body)
 
-    def test_blueprint_has_ordered_timing_and_beginner_learning_support(self) -> None:
+    def test_blueprint_preserves_learning_support_and_local_slide_validation_boundary(self) -> None:
         body = BLUEPRINT.read_text(encoding="utf-8")
         for marker in (
             "不超过 30 分钟",
@@ -59,15 +58,14 @@ class CourseBlueprintTests(unittest.TestCase):
             "独立检查",
             "正常路径",
             "失败路径",
-            "任务卡交接",
+            "学生是否掌握",
         ):
             self.assertIn(marker, body)
-        sections = re.split(r"^## L\d{2}｜.+$", body, flags=re.MULTILINE)[1:]
-        for section in sections:
-            times = [60 * int(m) + int(s) for m, s in re.findall(
-                r"^\|\s*\d{1,2}\s*\|\s*(\d{1,2}):(\d{2})\s*\|", section, re.MULTILINE)]
-            self.assertTrue(all(a < b for a, b in zip(times, times[1:])))
-            self.assertTrue(all(0 <= time < 1800 for time in times))
+        self.assertIn("## 本地课件检查", body)
+        self.assertIn("CODEXFDE_VALIDATE_LOCAL_SLIDES", body)
+        self.assertIn("tests.test_course_pptx", body)
+        self.assertIn("tests.test_course_ppt_endings", body)
+        self.assertRegex(body, r"逐页渲染|逐页检查")
 
     def test_editable_course_diagrams_and_previews_exist(self) -> None:
         for stem in ("course-three-layer", "workbench-capability-growth", "fde-feedback-loop"):
@@ -80,8 +78,8 @@ class CourseBlueprintTests(unittest.TestCase):
                          'PPT 不随 Git 发布；显式启用本地课件检查')
     def test_each_lesson_has_valid_local_decks(self) -> None:
         expected_titles = schedule_titles()
-        for number in expected_titles:
-            decks = sorted((COURSES / f'L{number:02d}' / 'slides').glob('*.pptx'))
+        for number, title in expected_titles.items():
+            decks = local_slide_decks(number)
             self.assertTrue(decks, f'L{number:02d} 缺少本地课件')
             for deck in decks:
                 with self.subTest(deck=deck.name), zipfile.ZipFile(deck) as archive:
@@ -90,7 +88,11 @@ class CourseBlueprintTests(unittest.TestCase):
                     self.assertTrue(names, '课件必须包含幻灯片')
                     for name in names:
                         ET.fromstring(archive.read(name))
-                    self.assertIn(f'L{number:02d}', slide_text(archive, 1))
+                    cover = presentation_slide_texts(archive)[0]
+                    self.assertTrue(has_lesson_marker(cover, number),
+                                    f'{deck.name} 封面缺少正确讲次 L{number:02d} / 第 {number:02d} 讲')
+                    self.assertIn(normalized_slide_text(title), normalized_slide_text(cover),
+                                  f'{deck.name} 封面标题须与正式课表一致')
 
     def test_no_inspection_outputs_are_published_with_student_materials(self) -> None:
         self.assertFalse([p for p in published_docs() if p.name.endswith('.inspect.ndjson')])

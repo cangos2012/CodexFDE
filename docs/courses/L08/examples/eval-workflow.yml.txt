@@ -1,5 +1,7 @@
 # Teaching candidate: review and adapt in your own repository before enabling.
 # This file is not in .github/workflows and is not an active workflow.
+# Set repository variables L08_FLOWERP_REPOSITORY and L08_FLOWERP_SHA first.
+# A/B pin the same product SHA; C selects the business-only repair SHA.
 name: L08 Candidate Eval
 on:
   pull_request:
@@ -11,25 +13,71 @@ jobs:
     timeout-minutes: 10
     env:
       CI_REPORT_DIR: _ci_reports/${{ github.run_id }}-${{ github.run_attempt }}
+      FLOWERP_PROJECT_ROOT: ${{ github.workspace }}/_projects/flowERP
+      L08_PRODUCT_REPOSITORY: ${{ vars.L08_FLOWERP_REPOSITORY }}
+      L08_PRODUCT_SHA: ${{ vars.L08_FLOWERP_SHA }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Require a fixed independent product source
+        shell: bash
+        run: |
+          [[ "$L08_PRODUCT_REPOSITORY" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] || { echo 'Set L08_FLOWERP_REPOSITORY to owner/repository'; exit 1; }
+          [[ "$L08_PRODUCT_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || { echo 'Set L08_FLOWERP_SHA to the full product commit SHA'; exit 1; }
+      - name: Checkout the frozen FlowERP candidate
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.L08_FLOWERP_REPOSITORY }}
+          ref: ${{ vars.L08_FLOWERP_SHA }}
+          path: _projects/flowERP
+          persist-credentials: false
+          # For a private product repo, configure the authorized read secret:
+          # token: ${{ secrets.L08_FLOWERP_READ_TOKEN }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Prepare project environment
+      - name: Prepare both project environments
         id: environment
+        shell: bash
         run: |
           python -m venv .venv
           .venv/bin/python -m pip install -e .
-      - name: Record checked-out version
-        run: git rev-parse HEAD
+          python -m venv "$FLOWERP_PROJECT_ROOT/.venv"
+          "$FLOWERP_PROJECT_ROOT/.venv/bin/python" -m pip install -e "$FLOWERP_PROJECT_ROOT"
+          .venv/bin/python -X utf8 -m workbench.cli environment-check --product
+          actual_product_sha="$(git -C "$FLOWERP_PROJECT_ROOT" rev-parse HEAD)"
+          [[ "${actual_product_sha,,}" == "${L08_PRODUCT_SHA,,}" ]]
+      - name: Record both versions and loaded check sources
+        id: sources
+        shell: bash
+        run: |
+          mkdir -p "$CI_REPORT_DIR"
+          {
+            printf 'course_sha='; git rev-parse HEAD
+            printf 'product_repository=%s\n' "$L08_PRODUCT_REPOSITORY"
+            printf 'product_sha='; git -C "$FLOWERP_PROJECT_ROOT" rev-parse HEAD
+            sha256sum eval/harness.py eval/cases.py
+            .venv/bin/python -c 'import eval.harness; print("course_harness=" + eval.harness.__file__)'
+            (
+              cd "$FLOWERP_PROJECT_ROOT"
+              .venv/bin/python -c 'import flowerp.service; print("product_service=" + flowerp.service.__file__)'
+              if [[ -f eval/erp_cases.py ]]; then sha256sum eval/erp_cases.py; else sha256sum eval/cases.py; fi
+            )
+          } > "$CI_REPORT_DIR/source-versions.txt"
+          cat "$CI_REPORT_DIR/source-versions.txt"
       - name: Unit tests
         run: .venv/bin/python -X utf8 -m unittest discover -s tests -v
-      - name: Unified blocking gate
-        if: ${{ !cancelled() && steps.environment.outcome == 'success' }}
-        run: .venv/bin/python -X utf8 -m eval.harness --suite blocking --report-path "$CI_REPORT_DIR/harness-blocking.json"
+      - name: Workbench blocking gate
+        if: ${{ !cancelled() && steps.environment.outcome == 'success' && steps.sources.outcome == 'success' }}
+        run: .venv/bin/python -X utf8 -m eval.harness --suite blocking --no-report
+      # Add every frozen personal business case with another --case argument.
+      # The default blocking gate above does not execute product cases.
+      - name: Explicit frozen business gate
+        if: ${{ !cancelled() && steps.environment.outcome == 'success' && steps.sources.outcome == 'success' }}
+        run: .venv/bin/python -X utf8 -m eval.harness --suite blocking --case sales_credit_and_atomic_reservation --report-path "$CI_REPORT_DIR/harness-blocking.json"
       - name: Bind report identity
-        if: ${{ !cancelled() && steps.environment.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.environment.outcome == 'success' && steps.sources.outcome == 'success' }}
         run: .venv/bin/python -X utf8 -m workbench.ci_evidence --report "$CI_REPORT_DIR/harness-blocking.json" --output "$CI_REPORT_DIR/ci-evidence.json"
       - name: Upload this attempt's evidence
         if: always()
@@ -39,4 +87,5 @@ jobs:
           path: |
             ${{ env.CI_REPORT_DIR }}/harness-blocking.json
             ${{ env.CI_REPORT_DIR }}/ci-evidence.json
+            ${{ env.CI_REPORT_DIR }}/source-versions.txt
           if-no-files-found: error

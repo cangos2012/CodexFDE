@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
 import json
 import subprocess
@@ -12,6 +13,8 @@ from unittest.mock import patch
 
 from agent.graph import run_graph
 from agent.loop import run_loop
+from agent.repair import build_repair_task
+from eval.harness import run_suite
 from workbench.automation import DeliveryAutomation
 from workbench.execution import CodexExecutionRunner, normalize_write_scope
 from workbench.evolution import EvolutionStore
@@ -22,6 +25,18 @@ from workbench.workflow import run_task
 
 
 class WorkbenchTests(unittest.TestCase):
+    @contextmanager
+    def isolated_agent_runtime(self):
+        with tempfile.TemporaryDirectory(prefix="workbench-agent-test-") as tmp:
+            runtime = Path(tmp)
+            # Graph has no runtime_dir argument; keep its original approval
+            # semantics while redirecting its hard-coded repair output here.
+            def graph_repair(report, _path):
+                return build_repair_task(report, runtime / "graph" / "repair-task.json")
+
+            with patch("agent.graph.build_repair_task", side_effect=graph_repair):
+                yield runtime
+
     @staticmethod
     def report(*failures: str) -> dict:
         results = [
@@ -387,19 +402,25 @@ done
             self.assertEqual("review", automation.wait(second["id"], 5)["status"])
 
     def test_loop_stops_when_green(self) -> None:
-        result = run_loop(max_rounds=3)
-        self.assertEqual("converged", result["status"]); self.assertEqual(1, result["rounds"])
+        with self.isolated_agent_runtime() as runtime:
+            report_path = runtime / "loop-blocking.json"
+            result = run_loop(
+                max_rounds=3, runtime_dir=runtime / "loop",
+                suite_runner=lambda suite, **kwargs: run_suite(suite, report_path=report_path, **kwargs),
+            )
+            self.assertEqual("converged", result["status"]); self.assertEqual(1, result["rounds"])
+            self.assertTrue(report_path.is_file())
 
     def test_graph_trace_reaches_human_review(self) -> None:
-        with patch("agent.graph.run_suite", return_value=self.report()):
+        with self.isolated_agent_runtime(), patch("agent.graph.run_suite", return_value=self.report()):
             result = run_graph(max_rounds=3, reject_once=True)
         self.assertEqual("completed", result["status"])
         self.assertTrue(any(step["to"] == "human_review" for step in result["trace"]))
         self.assertTrue(any(step["to"] == "develop" and "人工打回" in step["reason"] for step in result["trace"]))
 
     def test_graph_persists_human_review_and_resumes_with_named_approval(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            state_file = Path(tmp) / "delivery.json"
+        with self.isolated_agent_runtime() as runtime:
+            state_file = runtime / "graph" / "delivery.json"
             with patch("agent.graph.run_suite", return_value=self.report()):
                 pending = run_graph(require_human_review=True, state_file=state_file)
             self.assertEqual("awaiting_human_review", pending["status"])
@@ -411,27 +432,33 @@ done
             self.assertTrue(approved["reviewed_at"])
 
     def test_graph_rejects_anonymous_review(self) -> None:
-        with self.assertRaises(ValueError):
+        with self.isolated_agent_runtime(), self.assertRaises(ValueError):
             run_graph(review_decision="approve", reviewer="")
 
     def test_loop_enforces_measured_token_budget(self) -> None:
         reports = iter((self.report("first"), self.report("second")))
-        result = run_loop(
-            max_rounds=3, token_budget=50, timeout_seconds=30, use_codex=True,
-            suite_runner=lambda *_args, **_kwargs: next(reports),
-            executor=lambda *_args: {"returncode": 0, "usage": {"total_tokens": 60}},
-        )
-        self.assertEqual("stopped_token_budget", result["status"])
-        self.assertEqual(60, result["tokens_used"])
-        self.assertEqual(0, result["tokens_remaining"])
+        with self.isolated_agent_runtime() as runtime:
+            result = run_loop(
+                max_rounds=3, token_budget=50, timeout_seconds=30, use_codex=True,
+                suite_runner=lambda *_args, **_kwargs: next(reports),
+                executor=lambda *_args: {"returncode": 0, "usage": {"total_tokens": 60}},
+                runtime_dir=runtime / "loop",
+            )
+            self.assertEqual("stopped_token_budget", result["status"])
+            self.assertEqual(60, result["tokens_used"])
+            self.assertEqual(0, result["tokens_remaining"])
+            self.assertTrue((runtime / "loop" / "repair-round-1.json").is_file())
 
     def test_loop_stops_if_executor_cannot_report_usage(self) -> None:
-        result = run_loop(
-            token_budget=50, timeout_seconds=30, use_codex=True,
-            suite_runner=lambda *_args, **_kwargs: self.report("first"),
-            executor=lambda *_args: {"returncode": 0},
-        )
-        self.assertEqual("stopped_token_usage_unavailable", result["status"])
+        with self.isolated_agent_runtime() as runtime:
+            result = run_loop(
+                token_budget=50, timeout_seconds=30, use_codex=True,
+                suite_runner=lambda *_args, **_kwargs: self.report("first"),
+                executor=lambda *_args: {"returncode": 0},
+                runtime_dir=runtime / "loop",
+            )
+            self.assertEqual("stopped_token_usage_unavailable", result["status"])
+            self.assertTrue((runtime / "loop" / "repair-round-1.json").is_file())
 
     def test_feedback_requires_review_and_records_named_decision(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

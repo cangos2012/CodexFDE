@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import secrets
 import subprocess
@@ -19,12 +20,15 @@ from .course_versions import default_session_version
 
 
 class WebExecution:
-    def __init__(self, repository, runtime, tasks, *, enabled=False, submitter=None):
+    def __init__(self, repository, runtime, tasks, *, enabled=False, submitter=None,
+                 daily_workflow=None, delivery_runtime=None):
         self.repository = Path(repository).resolve()
         self.runtime = Path(runtime).resolve()
         self.tasks = tasks
         self.enabled = enabled
         self.submitter = submitter or submit_course
+        self.daily_workflow = daily_workflow
+        self.delivery_runtime = delivery_runtime
         self.plans = {}
         self.lock = threading.Lock()
         with self.tasks.connect() as connection:
@@ -126,28 +130,124 @@ class WebExecution:
         with self.lock:
             plan = copy.deepcopy(self.plans[plan_id])
         plan.pop('confirmation', None)
+        if plan.get('delegated_runtime') and plan['state'] in {'delegating', 'delegated'}:
+            plan.update(self._daily_result(plan))
         return plan
 
-    def prepare_daily(self, actor, request, acceptance, write_scope, non_goals='不扩大本次需求范围'):
+    @staticmethod
+    def _plan_hash(plan):
+        return hashlib.sha256(json.dumps(plan, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+    def _daily_service(self, initiative_id):
+        if not initiative_id or not self.daily_workflow or not self.delivery_runtime:
+            raise ValueError('旧日常执行入口已合并到首页事项。请从“事项与决策”建立事项，具名确认 PRD、技术方案、Profile 与验收人后执行；此入口不会另建任务。')
+        if getattr(self.daily_workflow.submitter, '__self__', None) is not self.delivery_runtime:
+            raise ValueError('事项尚未接入共享 DeliveryRuntime，请从首页事项入口核对运行配置')
+        return self.daily_workflow
+
+    def _confirmed_daily(self, workflow, initiative_id, revision):
+        data = workflow._load(initiative_id)
+        if type(revision) is not int or data['revision'] != revision:
+            raise ValueError('事项版本已变化，请从首页事项刷新并核对最新方案')
+        if data['stage'] != 'confirmed' or not data.get('plan'):
+            raise ValueError('请先在首页事项中具名确认 PRD、技术方案与验收人，再授权执行')
+        if not data['plan'].get('profile'):
+            raise ValueError('历史事项方案尚未冻结 Profile，请回到事项重新确认技术方案')
+        if not data.get('reviewer'):
+            raise ValueError('事项尚未具名确认验收人，请回到事项重新确认')
+        if time.time() > data['plan']['expires_at']:
+            raise ValueError('事项执行方案已过期，请回到事项重新确认')
+        return data
+
+    def prepare_daily(self, actor, request=None, acceptance=None, write_scope=None, non_goals=None,
+                      *, initiative_id=None, expected_revision=None):
         if not self.enabled:
             raise ValueError('本服务未开启网页代码执行；请使用 --enable-code-execution 启动工作台')
-        from .daily_delivery import prepare_daily
-        capability = CodexExecutionRunner(self.repository, self.runtime).capabilities()
-        if not capability['codex_available']:
-            raise ValueError(capability['reason'])
-        plan = prepare_daily(self.repository, self.runtime, actor, request, acceptance, write_scope, non_goals)
-        plan.update(plan_id=secrets.token_hex(18), confirmation=secrets.token_urlsafe(32),
-                    state='prepared', expires_at=time.time() + 900, task_id=None)
-        with self.lock:
+        workflow = self._daily_service(initiative_id)
+        actor = workflow.actor(actor)
+        # This row is an authorization alias, not another executable plan or queue.
+        with self.lock, workflow.lock:
+            data = self._confirmed_daily(workflow, initiative_id, expected_revision)
+            frozen = data['plan']
+            for field, value in (('request', request), ('acceptance', acceptance),
+                                 ('write_scope', write_scope), ('non_goals', non_goals)):
+                if value is not None and value != frozen[field]:
+                    raise ValueError('旧入口的需求或写集与已确认事项方案不一致，请在事项中讨论并重新确认')
+            existing = self.plans.get(frozen['plan_id'])
+            if existing and existing['state'] in {'delegating', 'delegated'}:
+                raise ValueError('原授权已受理或中断，请核对事项记录；不会重新准备或重放同一轮执行')
+            if existing and existing['state'] == 'prepared':
+                if existing['actor'] != actor or existing.get('expected_revision') != expected_revision:
+                    raise ValueError('同一已确认方案已有另一份署名或版本的授权，请回到事项核对')
+                return copy.deepcopy(existing)
+            plan = copy.deepcopy(frozen)
+            plan.update(kind='daily', delegated_runtime=True, initiative_id=initiative_id,
+                        expected_revision=expected_revision, confirmed_actor=frozen['actor'], actor=actor,
+                        canonical_plan_sha256=self._plan_hash(frozen), confirmation=secrets.token_urlsafe(32),
+                        state='prepared', task_id=None,
+                        execution_path=f'/api/v1/initiatives/{initiative_id}/workflow/execute',
+                        runtime_path=f'/api/v1/initiatives/{initiative_id}/runtime',
+                        control_path=f'/api/v1/initiatives/{initiative_id}/runtime/control')
             self._save(plan)
             self.plans[plan['plan_id']] = plan
         return copy.deepcopy(plan)
+
+    def _daily_result(self, plan):
+        result = {'plan_id': plan['plan_id'], 'state': plan['state'], 'task_id': plan.get('task_id'),
+                  'authorization_state': plan['state'],
+                  'initiative_id': plan['initiative_id'], 'execution_path': plan['execution_path'],
+                  'runtime_path': plan['runtime_path'], 'control_path': plan['control_path']}
+        workflow = self.daily_workflow
+        if workflow:
+            with workflow.lock:
+                current = workflow._load(plan['initiative_id'])
+                task_ids = {iteration['task_id'] for iteration in current.get('iterations', [])
+                            if iteration.get('plan_id') == plan['plan_id'] and iteration.get('task_id')}
+                if len(task_ids) > 1:
+                    raise ValueError('同一授权方案出现多个任务，请核对原事项记录，不自动选择或重放')
+                if task_ids:
+                    task_id = next(iter(task_ids))
+                    if plan.get('task_id') and plan['task_id'] != task_id:
+                        raise ValueError('授权回执与事项原任务不一致，请核对记录')
+                    result.update(task_id=task_id, state=self.tasks.get(task_id)['status'])
+                if (current.get('plan') or {}).get('plan_id') == plan['plan_id']:
+                    result['state'] = current['stage']
+        return result
+
+    def _authorize_daily(self, plan, confirmation, actor):
+        from .mutation_receipts import MutationPending
+        workflow = self._daily_service(plan.get('initiative_id') if plan.get('delegated_runtime') else None)
+        if not isinstance(confirmation, str) or not secrets.compare_digest(plan['confirmation'], confirmation) or actor != plan['actor']:
+            raise ValueError('授权与已展示事项方案不一致')
+        if plan['state'] == 'delegated':
+            return self._daily_result(plan)
+        if plan['state'] == 'delegating':
+            raise MutationPending('原授权已受理或中断，请核对事项与运行结果；不会自动重放')
+        if plan['state'] != 'prepared':
+            raise ValueError(plan.get('error') or '此授权已失效，请回到事项核对并重新准备')
+        with workflow.lock:
+            current = self._confirmed_daily(workflow, plan['initiative_id'], plan['expected_revision'])
+            if self._plan_hash(current['plan']) != plan['canonical_plan_sha256']:
+                raise ValueError('已确认事项方案已变化，请回到事项重新核对')
+        plan['state'] = 'delegating'
+        self._save(plan)
+        try:
+            workflow.execute(plan['initiative_id'], actor, plan['expected_revision'])
+        except Exception as error:
+            plan.update(state='failed', error=f'{type(error).__name__}: {error}')
+            self._save(plan)
+            raise
+        plan['state'] = 'delegated'
+        self._save(plan)
+        return self._daily_result(plan)
 
     def authorize(self, plan_id, confirmation, actor):
         if not self.enabled:
             raise ValueError('当前服务未开启网页代码执行，请先核对启动模式')
         with self.lock:
             plan = self.plans[plan_id]
+            if plan.get('kind') == 'daily':
+                return self._authorize_daily(plan, confirmation, actor)
             if not isinstance(confirmation, str) or not secrets.compare_digest(plan['confirmation'], confirmation) or actor != plan['actor']:
                 raise ValueError("授权与已展示方案不一致")
             if plan['state'] != 'prepared':
@@ -163,6 +263,18 @@ class WebExecution:
         return {'plan_id': plan_id, 'state': 'starting', 'task_id': None}
 
     def _run(self, plan_id):
+        from contextlib import ExitStack
+        from .maintenance import MaintenanceBusy, MaintenanceGate
+        with ExitStack() as ownership:
+            while True:
+                try:
+                    ownership.enter_context(MaintenanceGate(self.runtime).write())
+                    break
+                except MaintenanceBusy:
+                    time.sleep(.05)
+            self._run_owned(plan_id)
+
+    def _run_owned(self, plan_id):
         plan = self.get(plan_id)
         def created(task):
             with self.lock:
@@ -171,13 +283,11 @@ class WebExecution:
             if plan.get('initiative'):
                 link_initiative_task(self.tasks, plan['initiative'], task['id'], plan['actor'],
                                      plan['additional_eval_cases'], plan['requirement_sha256'])
-            self.tasks.append_event(task['id'], '网页具名授权日常研发' if plan.get('kind') == 'daily' else '网页具名授权课程隔离执行', actor=plan['actor'], evidence=plan)
+            self.tasks.append_event(task['id'], '网页具名授权课程隔离执行', actor=plan['actor'], evidence=plan)
         try:
             if plan.get('kind') == 'daily':
-                from .daily_delivery import submit_daily
-                output = submit_daily(self.repository, self.runtime, self.tasks, plan, created)
-            else:
-                output = self.submitter(repository_root=self.repository, runtime_dir=self.runtime,
+                raise ValueError('日常执行只允许委托已确认事项，不再启动旧执行线程')
+            output = self.submitter(repository_root=self.repository, runtime_dir=self.runtime,
                                     lesson_number=plan['lesson'], actor=plan['actor'], execute_code=True,
                                     eval_cases=tuple(plan['additional_eval_cases']),
                                     session_baseline_ref=plan['session_commit'],

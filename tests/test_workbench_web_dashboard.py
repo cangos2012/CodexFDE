@@ -35,7 +35,7 @@ class WorkbenchWebDashboardTests(unittest.TestCase):
         self.assertIn("/review", script)
         self.assertIn("renderControlSurface", script)
         self.assertIn("control_surface", script)
-        self.assertIn("提交并复验", html)
+        self.assertIn("运行本讲课程复验", html)
         self.assertIn("批准完成", html)
         self.assertNotIn("JSON.stringify(detail", script)
         self.assertIn("工作台正在被你造出来", script)

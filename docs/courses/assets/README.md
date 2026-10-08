@@ -2,6 +2,25 @@
 
 以下保留已发布的图示和历史截图，供逐项定位。文件存在不证明其所示运行属于当前版本；历史运行未在本次排查中重演，不作学生学习或产品验收证据。
 
+## 学习入口配图
+
+以下三张图由内置 ImageGen 于 2026-10-05 生成，用于 [docs 学习入口](../../README.md) 的关系解释和阅读导航，属于机制示意。
+
+- [先建工作台，再交付产品](readme-guide-20261005/01-build-workbench-deliver-flowerp.png)：区分工作台建设、FlowERP 交付与反馈改进。
+- [一讲怎样走到完成](readme-guide-20261005/02-complete-a-lesson.png)：首次判断、操作、复验、人审与迁移，失败时返回操作。
+- [按问题选择资料](readme-guide-20261005/03-choose-docs.png)：课表与大纲、courses、reference、architecture 各自的查阅用途。
+
+## 逐讲主线配图
+
+以下四张图由内置 ImageGen 于 2026-10-06 生成，用于说明相邻讲次解决的问题怎样递进。图中对象和箭头是教学示意，具体实现、执行位置与完成标准随本讲手册核对。
+
+- [L01～L04：建工作台，再完成第一次产品交付](lesson-mainline-20261006/01-first-delivery.png)：首次建设、协作规则、合同解析与受控执行，L04 才由工作台组织 FlowERP 交付。
+- [L05～L08：让同一套检查可信](lesson-mainline-20261006/02-trust-the-checks.png)：抓错、汇总、实际触发、远程复验分别解决一个新问题。
+- [L09～L12：控制失败后的动作](lesson-mainline-20261006/03-control-repair-and-review.png)：限定修复、判断停止、组织分工、等待具名决定。
+- [L13～L16：让别人能用并继续交付](lesson-mainline-20261006/04-use-feedback-and-transfer.png)：任务接口、真实页面、反馈改进与新环境迁移。
+
+## 其他图示与历史截图
+
 - [course-three-layer.drawio](course-three-layer.drawio)
 - [course-three-layer.svg](course-three-layer.svg)
 - [fde-evidence-chain.png](fde-evidence-chain.png)

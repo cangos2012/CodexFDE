@@ -9,6 +9,8 @@ from eval.harness import EVALS
 from .course_snapshot import source_paths, _git
 from .course_workspace import LessonSubprocessEvalRunner
 from .execution import CodexExecutionRunner, normalize_write_scope
+from .file_io import read_bytes
+from .reference_paths import resolve_reference, reference_mapping_scope, load_reference_mappings
 from .spec import parse_spec
 from .workflow import run_task
 
@@ -21,9 +23,11 @@ def snapshot_paths(root, runtime):
 
 
 def manifest(repository, runtime):
-    root = Path(repository).resolve()
-    return {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
-            for p in snapshot_paths(root, Path(runtime).resolve())}
+    runtime = Path(runtime).resolve()
+    with reference_mapping_scope(runtime, load_reference_mappings(runtime)):
+        root = resolve_reference(repository, runtime).resolve()
+        return {p.relative_to(root).as_posix(): hashlib.sha256(read_bytes(p)).hexdigest()
+                for p in snapshot_paths(root, runtime)}
 
 
 def prepare_daily(repository, runtime, actor, request, acceptance, write_scope, non_goals='不扩大本次需求范围', *, project=None):
@@ -85,11 +89,11 @@ def submit_daily(repository, runtime, tasks, plan, on_task_created, *, runner_fa
     if learning:
         learning.attach(binding_id, task['id'])
     tasks.append_event(task['id'], '本次需求 Spec 已冻结', actor=plan['actor'],
-                       evidence={'sha256': hashlib.sha256(spec_path.read_bytes()).hexdigest()})
+                       evidence={'sha256': hashlib.sha256(read_bytes(spec_path)).hexdigest()})
     workspace = folder / 'workspace'
     workspace.mkdir()
     for relative, digest in plan['source_manifest'].items():
-        content = (Path(repository) / relative).read_bytes()
+        content = read_bytes(Path(repository) / relative)
         if hashlib.sha256(content).hexdigest() != digest:
             raise ValueError('复制期间源码变化，请重新准备方案')
         target = workspace / relative
@@ -97,24 +101,33 @@ def submit_daily(repository, runtime, tasks, plan, on_task_created, *, runner_fa
         target.write_bytes(content)
     if manifest(repository, runtime) != plan['source_manifest']:
         raise ValueError('复制期间源码变化，请重新准备方案')
-    _git(workspace, 'init', '--quiet')
+    _git(workspace, 'init', '--quiet', runtime=runtime)
     # The snapshot already uses an explicit source allowlist. Preserve ignored
     # local contracts too; otherwise later patches mistake them for new files.
-    _git(workspace, 'add', '--force', '--all')
+    _git(workspace, 'add', '--force', '--all', runtime=runtime)
     _git(workspace, '-c', 'user.name=Workbench snapshot', '-c', 'user.email=workbench@localhost',
-         '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'Daily development source snapshot')
+         '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'Daily development source snapshot', runtime=runtime)
     tasks.append_event(task['id'], '已创建日常研发隔离副本', actor=plan['actor'], evidence={
         'path': str(workspace), 'source_sha256': plan['source_sha256'],
-        'baseline_commit': _git(workspace, 'rev-parse', 'HEAD')})
+        'baseline_commit': _git(workspace, 'rev-parse', 'HEAD', runtime=runtime)})
     cases = tuple(plan['eval_cases'])
     before = eval_factory(workspace, runtime, task['id'], cases, 'daily-before')()
     tasks.append_event(task['id'], '日常研发执行前检查', actor=plan['actor'], evidence=before)
     # Existing green checks are normal for new development; do not manufacture red.
     checkpoint()
     if learning:
-        learning.validate_binding(binding_id, workspace)
+        try:
+            learning.validate_binding(binding_id, workspace)
+            contract = learning.check_phase(binding_id, 'precheck', workspace)
+        except (ValueError, OSError) as error:
+            evidence = {'passed': False, 'workspace': str(workspace), 'message': str(error),
+                        'stopped_phase': 'precheck', 'recovery': 'retain_candidate_new_plan'}
+            learning.run_event(binding_id, 'precheck', evidence)
+            tasks.transition(task['id'], 'failed', '流程前置检查失败，保留候选并重新确认授权', error=str(error))
+            learning.finish(task['id'], note=str(error))
+            raise
         evidence = {'passed': True, 'workspace': str(workspace), 'baseline': plan['source_sha256'],
-                    'checks': [a['prepared'] for a in binding['assets'] if a['prepared']]}
+                    'checks': [a['prepared'] for a in binding['assets'] if a['prepared']], 'phase_contract': contract}
         learning.run_event(binding_id, 'precheck', evidence)
         tasks.append_event(task['id'], '受控流程前置检查通过', actor='harness', evidence=evidence)
     runner = runner_factory(workspace, runtime)
@@ -128,28 +141,45 @@ def submit_daily(repository, runtime, tasks, plan, on_task_created, *, runner_fa
         if evidence.get('success') and not evidence.get('changed_files'):
             evidence = {**evidence, 'success': False, 'message': '没有实际文件改动，不能认定需求已实现'}
         if learning:
+            contract = {'checks': [], 'required_files': []}
+            if evidence.get('success') is True:
+                try:
+                    contract = learning.check_phase(binding_id, 'implement', workspace)
+                except (ValueError, OSError) as error:
+                    evidence = {**evidence, 'success': False, 'message': str(error),
+                                'stopped_phase': 'implement', 'recovery': 'retain_candidate_new_plan'}
+            diff = (evidence.get('artifacts') or {}).get('diff')
+            diff_artifact = {'path': diff, 'sha256': hashlib.sha256(Path(diff).read_bytes()).hexdigest()} if diff and Path(diff).is_file() else None
             learning.run_event(binding_id, 'implement', {'passed': evidence.get('success') is True,
                 'changed_files': evidence.get('changed_files', []), 'binding_sha256': binding['sha256'],
-                'message': evidence.get('message'), 'invocation': evidence.get('invocation')})
+                'message': evidence.get('message'), 'invocation': evidence.get('invocation'),
+                'phase_contract': contract, 'diff_artifact': diff_artifact,
+                'stopped_phase': evidence.get('stopped_phase'), 'recovery': evidence.get('recovery')})
         return evidence
     result = run_task(tasks, task['id'], plan['actor'], execution_runner=execute,
                       suite_runner=eval_factory(workspace, runtime, task['id'], cases, 'daily-after'))
     if learning:
         report = result.get('result') or {}
+        contract = {'checks': [], 'required_files': []}
+        if result['status'] == 'review':
+            try:
+                contract = learning.check_phase(binding_id, 'eval', workspace)
+            except (ValueError, OSError) as error:
+                result = tasks.transition(task['id'], 'rework', '流程输出检查未通过，禁止进入人工接受',
+                    actor='harness', error=str(error), evidence={'stopped_phase': 'eval',
+                    'recovery': 'retain_candidate_new_plan', 'message': str(error)})
         learning.run_event(binding_id, 'eval', {'passed': result['status'] == 'review',
             'summary': report.get('summary'), 'report_path': report.get('report_path'),
-            'report_sha256': report.get('report_sha256'), 'candidate_manifest': manifest(workspace, runtime)})
+            'report_sha256': report.get('report_sha256'), 'candidate_manifest': manifest(workspace, runtime),
+            'phase_contract': contract, 'stopped_phase': 'eval' if result['status'] != 'review' else None,
+            'recovery': 'retain_candidate_new_plan' if result['status'] != 'review' else None})
         learning.finish(task['id'])
     # Include new files in the patch without committing or touching the source index.
-    for scope in plan['write_scope']:
-        if (workspace / scope).exists() or _git(workspace, 'ls-files', '--', scope):
-            _git(workspace, 'add', '--force', '--intent-to-add', '--all', '--', scope)
     patch_path = folder / 'changes.patch'
-    import subprocess
-    diff = subprocess.run(['git', 'diff', '--binary', 'HEAD'], cwd=workspace, capture_output=True, check=True)
-    patch_path.write_bytes(diff.stdout)
+    from .delivery_runtime import DeliveryRuntime
+    patch_path.write_bytes(DeliveryRuntime._patch(workspace, plan['write_scope']))
     tasks.append_event(task['id'], '日常研发交付包已保存', actor=plan['actor'], evidence={
         'workspace': str(workspace), 'patch_path': str(patch_path),
-        'patch_sha256': hashlib.sha256(diff.stdout).hexdigest(), 'source_sha256': plan['source_sha256'],
+        'patch_sha256': hashlib.sha256(read_bytes(patch_path)).hexdigest(), 'source_sha256': plan['source_sha256'],
         'status': result['status'], 'merged': False})
     return {'task': tasks.get(task['id'])}

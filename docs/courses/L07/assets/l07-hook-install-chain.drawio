@@ -1,0 +1,86 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="drawio" version="26.0.0">
+  <diagram name="安装与验证链路">
+    <mxGraphModel page="1" pageScale="1" pageWidth="1100" pageHeight="1320" background="#FFFFFF">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="&lt;div style=&quot;font-size:32px;line-height:1.45;font-weight:bold;&quot;&gt;L07｜把 Stop Hook 接入 Codex 的完整链路&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#17324D;strokeColor=#17324D;strokeWidth=2;fontColor=#FFFFFF;fontFamily=Microsoft YaHei;align=left;verticalAlign=top;spacing=20;" vertex="1" parent="1">
+          <mxGeometry x="40" y="30" width="1020" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3" value="&lt;div style=&quot;font-size:26px;line-height:1.45;font-weight:bold;&quot;&gt;6.1  确认实际候选与解释器&lt;/div&gt;&lt;div style=&quot;font-size:22px;line-height:1.45;&quot;&gt;位置：第 5 节任务返回的实际候选目录&lt;/div&gt;&lt;div style=&quot;font-size:22px;line-height:1.45;&quot;&gt;产出：候选绝对路径 + 可运行的 Python&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;strokeWidth=2;fontColor=#20354A;fontFamily=Microsoft YaHei;align=left;verticalAlign=top;spacing=20;" vertex="1" parent="1">
+          <mxGeometry x="100" y="180" width="900" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="4" value="&lt;div style=&quot;font-size:26px;line-height:1.45;font-weight:bold;&quot;&gt;6.2  审查 hook_staging 中的两份文件&lt;/div&gt;&lt;div style=&quot;font-size:22px;line-height:1.45;&quot;&gt;位置：hook_staging/hooks.json 与 quality_gate.py&lt;/div&gt;&lt;div style=&quot;font-size:22px;line-height:1.45;&quot;&gt;核对：Stop、处理器路径、解释器与检查命令&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;strokeWidth=2;fontColor=#20354A;fontFamily=Microsoft YaHei;align=left;verticalAlign=top;spacing=20;" vertex="1" parent="1">
+          <mxGeometry x="100" y="330" width="900" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="5" value="&lt;div style=&quot;font-size:26px;line-height:1.45;font-weight:bold;&quot;&gt;6.3  安装到候选的 .codex 目录&lt;/div&gt;&lt;div style=&quot;font-size:22px;line-height:1.45;&quot;&gt;位置：.codex/hooks.json 与 .codex/hooks/quality_gate.py&lt;/div&gt;&lt;div style=&quot;font-size:22px;line-height:1.45;&quot;&gt;产出：安装后文件与指纹；已有配置先备份再合并&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;strokeWidth=2;fontColor=#20354A;fontFamily=Microsoft YaHei;align=left;verticalAlign=top;spacing=20;" vertex="1" parent="1">
+          <mxGeometry x="100" y="480" width="900" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="6" value="&lt;div style=&quot;font-size:26px;line-height:1.45;font-weight:bold;&quot;&gt;6.4  在候选启动 Codex CLI，用 /hooks 信任&lt;/div&gt;&lt;div style=&quot;font-size:22px;line-height:1.45;&quot;&gt;位置：该候选目录中的交互会话&lt;/div&gt;&lt;div style=&quot;font-size:22px;line-height:1.45;&quot;&gt;产出：项目来源、执行命令与已信任状态&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE6CC;strokeColor=#D79B00;strokeWidth=2;fontColor=#20354A;fontFamily=Microsoft YaHei;align=left;verticalAlign=top;spacing=20;" vertex="1" parent="1">
+          <mxGeometry x="100" y="630" width="900" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="7" value="&lt;div style=&quot;font-size:26px;line-height:1.45;font-weight:bold;&quot;&gt;6.5  只读结束，触发真实 Stop 发现错误&lt;/div&gt;&lt;div style=&quot;font-size:22px;line-height:1.45;&quot;&gt;位置：保留金额缺陷的候选 + Codex 会话&lt;/div&gt;&lt;div style=&quot;font-size:22px;line-height:1.45;&quot;&gt;产出：金额错误 → 阻断理由 + 续跑记录&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;strokeWidth=2;fontColor=#20354A;fontFamily=Microsoft YaHei;align=left;verticalAlign=top;spacing=20;" vertex="1" parent="1">
+          <mxGeometry x="100" y="780" width="900" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="8" value="&lt;div style=&quot;font-size:26px;line-height:1.45;font-weight:bold;&quot;&gt;6.6  修复、显式复验，再获 Stop 通过&lt;/div&gt;&lt;div style=&quot;font-size:22px;line-height:1.45;&quot;&gt;位置：同一候选；修复金额公式后重跑原检查&lt;/div&gt;&lt;div style=&quot;font-size:22px;line-height:1.45;&quot;&gt;产出：显式 Eval 绿 + 新一轮正常 Stop 的绿&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;strokeWidth=2;fontColor=#20354A;fontFamily=Microsoft YaHei;align=left;verticalAlign=top;spacing=20;" vertex="1" parent="1">
+          <mxGeometry x="100" y="930" width="900" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="9" value="&lt;div style=&quot;font-size:26px;line-height:1.45;font-weight:bold;&quot;&gt;6.7  交接四类证据并具名审核&lt;/div&gt;&lt;div style=&quot;font-size:22px;line-height:1.45;&quot;&gt;交接：最终配置 / 会话 / 报告 / 审核记录&lt;/div&gt;&lt;div style=&quot;font-size:22px;line-height:1.45;&quot;&gt;判断：指纹与候选一致；缺项保持待完成&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;strokeWidth=2;fontColor=#20354A;fontFamily=Microsoft YaHei;align=left;verticalAlign=top;spacing=20;" vertex="1" parent="1">
+          <mxGeometry x="100" y="1080" width="900" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="10" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#6A7A8C;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1.0;entryX=0.5;entryY=0.0;" edge="1" parent="1" source="3" target="4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="11" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#6A7A8C;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1.0;entryX=0.5;entryY=0.0;" edge="1" parent="1" source="4" target="5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="12" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#6A7A8C;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1.0;entryX=0.5;entryY=0.0;" edge="1" parent="1" source="5" target="6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="13" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#6A7A8C;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1.0;entryX=0.5;entryY=0.0;" edge="1" parent="1" source="6" target="7">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="14" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#6A7A8C;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1.0;entryX=0.5;entryY=0.0;" edge="1" parent="1" source="7" target="8">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="15" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#6A7A8C;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1.0;entryX=0.5;entryY=0.0;" edge="1" parent="1" source="8" target="9">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="20" value="教学示意 · 按顺序操作，所有检查指向同一实际候选" style="text;html=1;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontSize=22;fontColor=#49647E;" vertex="1" parent="1">
+          <mxGeometry x="100" y="130" width="960" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="21" value="文件已安装 ≠ 宿主已信任 ≠ 真实触发已验证 ≠ 业务已验收" style="text;html=1;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontSize=22;fontColor=#49647E;" vertex="1" parent="1">
+          <mxGeometry x="100" y="1230" width="960" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="50" value="" style="group;pointerEvents=0;" vertex="1" parent="1">
+          <mxGeometry x="100" y="1270" width="900" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="51" value="" style="rounded=1;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;" vertex="1" parent="50">
+          <mxGeometry x="0" y="5" width="25" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="52" value="环境与安装" style="text;html=1;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontSize=20;fontColor=#49647E;" vertex="1" parent="50">
+          <mxGeometry x="35" y="0" width="160" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="53" value="" style="rounded=1;html=1;fillColor=#FFE6CC;strokeColor=#D79B00;" vertex="1" parent="50">
+          <mxGeometry x="230" y="5" width="25" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="54" value="信任与注意" style="text;html=1;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontSize=20;fontColor=#49647E;" vertex="1" parent="50">
+          <mxGeometry x="265" y="0" width="160" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="55" value="" style="rounded=1;html=1;fillColor=#F8CECC;strokeColor=#B85450;" vertex="1" parent="50">
+          <mxGeometry x="460" y="5" width="25" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="56" value="失败证据" style="text;html=1;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontSize=20;fontColor=#49647E;" vertex="1" parent="50">
+          <mxGeometry x="495" y="0" width="160" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="57" value="" style="rounded=1;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="50">
+          <mxGeometry x="690" y="5" width="25" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="58" value="恢复与交接" style="text;html=1;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontSize=20;fontColor=#49647E;" vertex="1" parent="50">
+          <mxGeometry x="725" y="0" width="160" height="30" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

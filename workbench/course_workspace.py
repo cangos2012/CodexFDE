@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -10,6 +11,7 @@ from pathlib import Path
 from typing import Callable
 
 from eval.report_contract import validate_report
+from .file_io import read_bytes, read_text, atomic_write_text
 
 
 ProcessRunner = Callable[..., subprocess.CompletedProcess]
@@ -56,7 +58,7 @@ class CourseWorktreeManager:
             from .lesson_constructibility import apply_student_start
             evidence["student_start"] = apply_student_start(target, lesson_number)
         metadata = self.runtime_dir / "course-worktrees" / f"{task_id}.json"
-        metadata.write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_text(metadata, json.dumps(evidence, ensure_ascii=False, indent=2))
         return evidence
 
     def prepare_for_lesson(self, lesson_number: int, *, task_id: str | None = None, source: str = "baseline") -> dict:
@@ -84,7 +86,7 @@ class CourseWorktreeManager:
             "不能声称课程基线已经发布。"
         )
         metadata = self.runtime_dir / "course-worktrees" / f"{stamp}.json"
-        metadata.write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_text(metadata, json.dumps(evidence, ensure_ascii=False, indent=2))
         return evidence
 
     def _revision(self, cwd: Path, revision: str) -> str | None:
@@ -111,6 +113,23 @@ class LessonSubprocessEvalRunner:
         self.process_runner = process_runner or subprocess.run
 
     def __call__(self, suite: str = "blocking", write_report: bool = True) -> dict:
+        from .daily_delivery import manifest
+        from .eval_harness import fingerprint
+        def snapshot():
+            if (self.workspace_root / '.git').exists():
+                return manifest(self.workspace_root, self.runtime_dir)
+            from .execution import _is_sensitive_path
+            files = {}
+            for path in self.workspace_root.rglob('*'):
+                relative = path.relative_to(self.workspace_root)
+                if any(p in {'.venv', '__pycache__', '.runtime', '.git', 'node_modules'} for p in relative.parts) or path.resolve().is_relative_to(self.runtime_dir) or _is_sensitive_path(relative.as_posix()):
+                    continue
+                if path.is_symlink() or not path.resolve().is_relative_to(self.workspace_root):
+                    raise ValueError('隔离Eval候选包含外部链接')
+                if path.is_file():
+                    files[relative.as_posix()] = hashlib.sha256(read_bytes(path)).hexdigest()
+            return files
+        before = snapshot()
         attempt_id = uuid.uuid4().hex
         # Unique directories retain earlier successes AND failures, including a
         # previous attempt that did not produce a report at all.
@@ -125,6 +144,8 @@ class LessonSubprocessEvalRunner:
         for name in self.case_names:
             command.extend(["--case", name])
         started_at = datetime.now(timezone.utc).isoformat()
+        from .evidence_gate import eval_contract
+        contract = eval_contract(self.runtime_dir, self.task_id, None)
         def receipt(returncode, stdout, stderr):
             def as_text(value):
                 return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value or ""
@@ -133,6 +154,7 @@ class LessonSubprocessEvalRunner:
                 "workspace": str(self.workspace_root), "command": command,
                 "started_at": started_at, "finished_at": datetime.now(timezone.utc).isoformat(),
                 "returncode": returncode, "stdout": as_text(stdout), "stderr": as_text(stderr),
+                "contract": contract, "candidate_sha256": fingerprint(before),
             }, ensure_ascii=False, indent=2), encoding="utf-8")
         try:
             completed = self.process_runner(
@@ -151,10 +173,12 @@ class LessonSubprocessEvalRunner:
                 f"隔离 Eval 未生成报告（exit={completed.returncode}）：{(completed.stderr or '')[-2000:]}"
             )
         try:
-            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report = json.loads(read_text(report_path, encoding="utf-8"))
         except (ValueError, OSError) as exc:
             raise RuntimeError(f"隔离 Eval 报告不可读：{report_path}") from exc
         validate_report(report, self.case_names, completed.returncode, suite)
+        if snapshot() != before:
+            raise RuntimeError('隔离 Eval 期间候选源码变化，请重新复验')
         report["runner"] = {
             "workspace": str(self.workspace_root),
             "process_returncode": completed.returncode,
@@ -162,7 +186,11 @@ class LessonSubprocessEvalRunner:
             "attempt_id": attempt_id,
             "report_path": str(report_path),
             "receipt_path": str(receipt_path),
+            "process_path": str(receipt_path),
+            "process_sha256": hashlib.sha256(read_bytes(receipt_path)).hexdigest(),
+            "candidate_sha256": fingerprint(before),
             "validated": True,
+            **contract,
         }
         return report
 

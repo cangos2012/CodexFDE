@@ -9,16 +9,42 @@ if ($Latest) {
     if (-not (Test-Path -LiteralPath $l05Pointer)) { throw '尚无会话，请先执行第 1.1 节的初始化命令' }
     $Resume = (Get-Content -LiteralPath $l05Pointer -Raw -Encoding utf8).Trim()
 }
+$root = $l05Root
+$l05LocalPython = Join-Path $root '.venv/Scripts/python.exe'
 if ($Resume) {
     $script:l05Session = Get-Content -LiteralPath $Resume -Raw -Encoding utf8 | ConvertFrom-Json
+    if (-not $l05Session.control -or -not $l05Session.python) { throw '会话缺少控制目录或解释器，请核对原文件。' }
+    if (-not [System.IO.Path]::IsPathRooted($l05Session.control) -or -not [System.IO.Path]::IsPathRooted($l05Session.python)) { throw '会话控制目录和解释器必须是绝对路径。' }
+    if ((Resolve-Path -LiteralPath $l05Session.control).Path -ne $l05Root) { throw '会话属于其他控制仓库，请核对来源。' }
+    $l05SelectedPython = [System.IO.Path]::GetFullPath($l05Session.python)
+} elseif (Test-Path -LiteralPath $l05LocalPython -PathType Leaf) {
+    $l05SelectedPython = (Resolve-Path -LiteralPath $l05LocalPython).Path
+} elseif ($env:VIRTUAL_ENV -and (Test-Path -LiteralPath (Join-Path $env:VIRTUAL_ENV 'Scripts/python.exe') -PathType Leaf)) {
+    $l05SelectedPython = (Resolve-Path -LiteralPath (Join-Path $env:VIRTUAL_ENV 'Scripts/python.exe')).Path
 } else {
-    $root = $l05Root
-    if (-not (Test-Path -LiteralPath (Join-Path $root '.venv/Scripts/python.exe'))) { throw '请在已安装项目的控制仓库根目录运行' }
+    throw '控制仓库没有 .venv；请先恢复 L01 原参考虚拟环境，不使用系统 Python。'
+}
+if (-not (Test-Path -LiteralPath $l05SelectedPython -PathType Leaf)) { throw '原会话的虚拟环境解释器不可用，请核对原参考环境。' }
+$l05VerifyPython = @'
+import sys
+from pathlib import Path
+root = Path(sys.argv[1]).resolve()
+selected = Path(sys.argv[2]).absolute()
+if sys.prefix == sys.base_prefix or Path(sys.prefix).resolve() != selected.parent.parent.resolve():
+    sys.exit('所选 Python 不是本次项目虚拟环境，请先恢复原 .venv。')
+sys.path.insert(0, str(root))
+import workbench
+if not Path(workbench.__file__).resolve().is_relative_to(root):
+    sys.exit('工作台源码不属于当前控制仓库，请核对环境。')
+'@
+& $l05SelectedPython -B -X utf8 -c $l05VerifyPython $l05Root $l05SelectedPython
+if ($LASTEXITCODE -ne 0) { throw '课程解释器或控制源码核对失败，请先排查原环境。' }
+if (-not $Resume) {
     $stamp = (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0,8)
     $run = Join-Path $root ".runtime/l05-practice/$stamp"
     New-Item -ItemType Directory -Path $run | Out-Null
     $script:l05Session = [pscustomobject]@{
-        control=$root; python=(Join-Path $root '.venv/Scripts/python.exe'); run=$run
+        control=$root; python=$l05SelectedPython; run=$run
         runtime=(Join-Path $root '.runtime/l04-learning'); stamp=$stamp
         actor='L05 teaching run'; gitName='L05 teaching run'; gitEmail='l05@example.invalid'
         identitySource='teaching-default-not-human-review'
@@ -81,3 +107,4 @@ function Invoke-L05Python {
 }
 Write-Host "会话文件：$(Join-Path $l05Run 'session.json')"
 Write-Host "控制目录：$l05Control；沿用工作台数据：$l05Runtime"
+Write-Host "课程解释器：$l05Python"

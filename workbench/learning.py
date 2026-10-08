@@ -13,6 +13,7 @@ import uuid
 from pathlib import Path
 
 from .task_store import TaskStore
+from .reference_paths import resolve_reference
 
 
 def canonical(value):
@@ -40,6 +41,47 @@ def strings(value, label, *, empty=False):
     if not isinstance(value, list) or len(value) > 20 or (not empty and not value):
         raise ValueError(label + '需要文本列表（最多 20 项）')
     return list(dict.fromkeys(required(v, label, 300) for v in value))
+
+
+REQUIRED_EVIDENCE = ['precheck', 'implementation_diff', 'project_eval', 'human_review']
+RECOVERY = 'retain_candidate_new_plan'
+
+
+def recipe_checks(value, label, *, empty=True):
+    if not isinstance(value, list) or len(value) > 20 or (not empty and not value):
+        raise ValueError(label + '需要检查列表（最多 20 项）')
+    result = []
+    for check in value:
+        if not isinstance(check, dict) or check.get('kind') not in {'file_exists', 'file_contains'}:
+            raise ValueError(label + '支持 file_exists 或 file_contains')
+        item = {'kind': check['kind'], 'path': required(check.get('path'), '检查路径', 300)}
+        if check['kind'] == 'file_contains':
+            item['text'] = required(check.get('text'), '应包含内容', 1000)
+        result.append(item)
+    return result
+
+
+def checked_file(root, path):
+    root = Path(root).resolve()
+    file = (root / path).resolve()
+    if (Path(path).is_absolute() or '\\' in path or not file.is_relative_to(root)
+            or file == root or any(p == '.git' or p.startswith('.env') for p in Path(path).parts)):
+        raise ValueError('流程检查路径越过项目边界')
+    if not file.is_file() or file.stat().st_size > 2_000_000:
+        raise ValueError('流程前置或阶段检查失败：文件不存在或过大：' + path)
+    return file
+
+
+def execute_checks(checks, root):
+    result = []
+    for check in checks:
+        file = checked_file(root, check['path'])
+        raw = file.read_bytes()
+        if check['kind'] == 'file_contains' and check['text'] not in raw.decode('utf-8', errors='replace'):
+            raise ValueError('流程前置或阶段检查失败：内容不满足：' + check['path'])
+        result.append({'path': check['path'], 'kind': check['kind'],
+                       'sha256': hashlib.sha256(raw).hexdigest(), 'passed': True})
+    return result
 
 
 class LearningStore:
@@ -97,18 +139,53 @@ class LearningStore:
             raise ValueError('事项没有项目归属')
         return row['project_id']
 
-    def _belongs(self, initiative_id, task_id):
+    def _task_ids(self, initiative_id):
         with self.tasks.connect() as db:
             row = db.execute('SELECT linked_task_id FROM initiatives WHERE id=?', (initiative_id,)).fetchone()
-            flow = db.execute('SELECT payload FROM initiative_workflows WHERE id=?', (initiative_id,)).fetchone()
+            has_workflows = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='initiative_workflows'").fetchone()
+            flow = db.execute('SELECT payload FROM initiative_workflows WHERE id=?', (initiative_id,)).fetchone() if has_workflows else None
         data = json.loads(flow['payload']) if flow else {}
         ids = {data.get('active_task_id'), row['linked_task_id'] if row else None}
         ids.update(i.get('task_id') for i in data.get('iterations', []))
         for cycle in data.get('completed_cycles', []):
             ids.add(cycle.get('active_task_id'))
             ids.update(i.get('task_id') for i in cycle.get('iterations') or [])
-        if task_id not in ids:
+        return ids - {None, ''}
+
+    def _belongs(self, initiative_id, task_id):
+        if task_id not in self._task_ids(initiative_id):
             raise ValueError('来源任务不属于指定事项')
+
+    def source_options(self, initiative_id):
+        """Eligible original tasks and named accepted failure feedback for this item."""
+        task_ids = self._task_ids(initiative_id)
+        if not task_ids:
+            return {'tasks': [], 'feedback': []}
+        with self.tasks.connect() as db:
+            has_feedback = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='feedback'").fetchone()
+            feedback = [dict(row) for row in db.execute(
+                "SELECT id,task_id,conclusion FROM feedback WHERE status='accepted' AND COALESCE(reviewed_by,'')<>'' "
+                "AND task_id IN (" + ','.join('?' for _ in task_ids) + ') ORDER BY id', tuple(task_ids))] if has_feedback else []
+        tasks, failures = [], set()
+        for task_id in sorted(task_ids):
+            try:
+                task = self.tasks.get(task_id)
+            except KeyError:
+                continue
+            success = task['status'] == 'completed' and task.get('review_decision') == 'approve' and bool(task.get('reviewed_by'))
+            if success:
+                try:
+                    self.report(task, passing=True)
+                except (ValueError, OSError):
+                    success = False
+            failed = task['status'] in {'rework', 'failed', 'dead_letter'}
+            if failed and any(f['task_id'] == task_id for f in feedback):
+                failures.add(task_id)
+            if success or task_id in failures:
+                tasks.append({'id': task_id, 'status': task['status'], 'eligible_success': success,
+                              'label': task_id + ' · ' + task['status'] + ' · ' + task['request']})
+        return {'tasks': tasks, 'feedback': [{'id': f['id'], 'task_id': f['task_id'],
+            'label': f['id'] + ' · ' + f['conclusion']} for f in feedback if f['task_id'] in failures]}
 
     def report(self, task, *, passing=False):
         report = task.get('result') or {}
@@ -125,7 +202,7 @@ class LearningStore:
             return None
         root = Path(self.path).resolve().parent
         file = Path(path)
-        file = file.resolve() if file.is_absolute() else (root / file).resolve()
+        file = resolve_reference(file, root).resolve() if file.is_absolute() else (root / file).resolve()
         if file.parent != (root / 'reports').resolve() or not file.is_file():
             raise ValueError('任务报告不在受控目录或已经丢失')
         if hashlib.sha256(file.read_bytes()).hexdigest() != sha:
@@ -172,6 +249,9 @@ class LearningStore:
         if task['events'][:len(original)] != original:
             raise ValueError('原始轨迹已变化')
         self.report(task)
+        if asset.get('generation'):
+            from .learning_generation import validate_generation_reference
+            validate_generation_reference(self.tasks, asset['generation'])
 
     @staticmethod
     def recipe(value):
@@ -205,16 +285,46 @@ class LearningStore:
                           'instruction': required(step.get('instruction'), '步骤说明', 1500)})
         if value.get('eval_entry') != 'project_blocking' or value.get('authorization') != 'confirmed_plan':
             raise ValueError('流程必须使用已确认方案授权和既有项目阻断 Eval')
-        return {'parameters': parameters, 'preconditions': normalized, 'steps': clean,
+        result = {'parameters': parameters, 'preconditions': normalized, 'steps': clean,
                 'authorization': 'confirmed_plan', 'eval_entry': 'project_blocking',
                 'outputs': strings(value.get('outputs'), '输出证据'),
                 'stop': required(value.get('stop'), '停止条件'), 'rollback': required(value.get('rollback'), '回退方式')}
+        version = value.get('schema_version', 1)
+        if type(version) is not int or version not in {1, 2}:
+            raise ValueError('流程结构版本须为 1 或 2')
+        if version == 1:
+            if any(k in value for k in ('stage_checks', 'required_files', 'required_evidence', 'recovery')):
+                raise ValueError('可执行阶段约束需要 schema_version 2')
+            return result
+        stages = value.get('stage_checks', {})
+        if not isinstance(stages, dict) or set(stages) - {'precheck', 'implement', 'eval'}:
+            raise ValueError('阶段检查仅支持 precheck、implement、eval')
+        files = value.get('required_files', [])
+        if not isinstance(files, list) or len(files) > 20:
+            raise ValueError('必需文件最多 20 项')
+        files = [{'phase': item.get('phase'), 'path': required(item.get('path'), '必需文件路径', 300)}
+                 for item in files if isinstance(item, dict)] if all(isinstance(i, dict) for i in files) else None
+        if files is None or any(item['phase'] not in {'implement', 'eval'} for item in files):
+            raise ValueError('必需文件阶段须为 implement 或 eval')
+        evidence = value.get('required_evidence', REQUIRED_EVIDENCE)
+        if not isinstance(evidence, list) or set(evidence) != set(REQUIRED_EVIDENCE) or len(evidence) != len(REQUIRED_EVIDENCE):
+            raise ValueError('流程不能删除前置、实际 Diff、项目 Eval 或具名人审证据')
+        if value.get('recovery', RECOVERY) != RECOVERY:
+            raise ValueError('恢复须保留候选并重新确认授权，不能自动回退客户源码')
+        result.update(schema_version=2,
+                      stage_checks={phase: recipe_checks(stages.get(phase, []), '阶段检查') for phase in ('precheck', 'implement', 'eval')},
+                      required_files=files, required_evidence=list(REQUIRED_EVIDENCE), recovery=RECOVERY)
+        return result
 
     def create(self, initiative_id, actor, fields):
         actor = human(actor)
         if not isinstance(fields, dict) or fields.get('kind') not in {'memory', 'workflow'}:
             raise ValueError('请选择记忆或流程候选')
         project = self.project(initiative_id)
+        generation = None
+        if fields.get('generation_id'):
+            from .learning_generation import validate_generated_candidate
+            generation = validate_generated_candidate(self.tasks, initiative_id, fields)
         if fields.get('feedback_id') and not fields.get('evolution_id'):
             from .evolution import EvolutionStore
             evolutions = EvolutionStore(self.path)
@@ -238,6 +348,8 @@ class LearningStore:
                    'conflict_key': required(fields.get('conflict_key', fields.get('title')), '冲突主题', 200),
                    'source': source, 'created_by': actor, 'created_at': time.time(),
                    'recipe': self.recipe(fields.get('recipe')) if fields['kind'] == 'workflow' else None}
+        if generation:
+            payload['generation'] = generation
         with self.tasks.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             payload['version'] = db.execute('SELECT COALESCE(MAX(version),0)+1 FROM learning_assets WHERE family=?', (payload['family'],)).fetchone()[0]
@@ -386,6 +498,37 @@ class LearningStore:
         self.check_source(asset)
 
     @staticmethod
+    def expanded_recipe(asset, parameters):
+        recipe = asset['recipe']
+        if not isinstance(parameters, dict) or set(parameters) != set(recipe['parameters']):
+            raise ValueError('流程参数必须与定义完全一致')
+        parameters = {k: required(v, '参数 ' + k, 300) for k, v in parameters.items()}
+        def expand(value):
+            if isinstance(value, str):
+                for key, argument in parameters.items():
+                    value = value.replace('${' + key + '}', argument)
+                if '${' in value:
+                    raise ValueError('流程引用未定义参数')
+                return value
+            if isinstance(value, list):
+                return [expand(v) for v in value]
+            if isinstance(value, dict):
+                return {k: expand(v) for k, v in value.items()}
+            return value
+        return expand(recipe)
+
+    @staticmethod
+    def execution_summary(entry):
+        asset = entry['snapshot']
+        summary = {k: asset[k] for k in ('id', 'version', 'kind', 'title', 'content', 'boundary')}
+        summary.update(parameters=entry['parameters'], prepared=entry['prepared'], sha256=entry['sha256'])
+        if asset['recipe']:
+            summary['recipe'] = (LearningStore.expanded_recipe(asset, entry['parameters'])
+                if asset['recipe'].get('schema_version') == 2 else dict(asset['recipe']) |
+                {'steps': entry['prepared']['steps'], 'legacy_text_conditions': True})
+        return summary
+
+    @staticmethod
     def preconditions(asset, parameters, root):
         recipe = asset['recipe']
         if not isinstance(parameters, dict) or set(parameters) != set(recipe['parameters']):
@@ -410,7 +553,29 @@ class LearningStore:
             if check['kind'] == 'file_contains' and expand(check['text']) not in raw.decode('utf-8', errors='replace'):
                 raise ValueError('流程前置检查失败：内容不满足：' + path)
             checks.append({'path': path, 'kind': check['kind'], 'sha256': hashlib.sha256(raw).hexdigest(), 'passed': True})
-        return {'checks': checks, 'steps': [{**s, 'instruction': expand(s['instruction'])} for s in recipe['steps']]}
+        result = {'checks': checks, 'steps': [{**s, 'instruction': expand(s['instruction'])} for s in recipe['steps']]}
+        if recipe.get('schema_version') == 2:
+            expanded = LearningStore.expanded_recipe(asset, parameters)
+            result['checks'] += execute_checks(expanded['stage_checks']['precheck'], root)
+            result['recipe'] = expanded
+        return result
+
+    def check_phase(self, binding_id, phase, root):
+        if phase not in {'precheck', 'implement', 'eval'}:
+            raise ValueError('未知受控流程阶段')
+        evidence = {'checks': [], 'required_files': []}
+        for entry in self.binding(binding_id)['assets']:
+            asset = entry['snapshot']
+            if not asset['recipe'] or asset['recipe'].get('schema_version') != 2:
+                continue
+            recipe = self.expanded_recipe(asset, entry['parameters'])
+            evidence['checks'] += execute_checks(recipe['stage_checks'][phase], root)
+            for item in recipe['required_files']:
+                if item['phase'] == phase:
+                    file = checked_file(root, item['path'])
+                    evidence['required_files'].append({'path': item['path'], 'phase': phase,
+                        'sha256': hashlib.sha256(file.read_bytes()).hexdigest()})
+        return evidence
 
     def bind(self, initiative_id, plan_id, decision, root, actor):
         actor = human(actor)
@@ -470,12 +635,25 @@ class LearningStore:
             db.execute('INSERT OR IGNORE INTO learning_runs(binding_id,phase,payload,at) VALUES(?,?,?,?)',
                        (binding_id, phase, canonical(evidence), time.time()))
 
+    def record_recheck(self, binding_id, evidence):
+        """Retain every Eval attempt; acceptance reads the latest attempt."""
+        self.binding(binding_id)
+        self.run_event(binding_id, 'eval_recheck/' + uuid.uuid4().hex, evidence)
+
+    @staticmethod
+    def _execution_phases(db, binding_id):
+        phases = {}
+        for row in db.execute('SELECT phase,payload FROM learning_runs WHERE binding_id=? ORDER BY id', (binding_id,)):
+            phase = 'eval' if row['phase'].startswith('eval_recheck/') else row['phase']
+            phases[phase] = json.loads(row['payload'])
+        return phases
+
     def check_acceptance(self, task_id):
         with self.tasks.connect() as db:
             row = db.execute('SELECT id FROM learning_bindings WHERE task_id=?', (task_id,)).fetchone()
             if not row:
                 return
-            phases = {r['phase']: json.loads(r['payload']) for r in db.execute('SELECT phase,payload FROM learning_runs WHERE binding_id=?', (row['id'],))}
+            phases = self._execution_phases(db, row['id'])
         binding = self.binding(row['id'])
         for entry in binding['assets']:
             self._eligible(self.get(entry['id']), binding['initiative_id'])
@@ -484,13 +662,56 @@ class LearningStore:
             raise ValueError('缺少实际流程执行与检查证据，不能认定复用通过')
         task = self.tasks.get(task_id)
         runner = (task.get('result') or {}).get('runner') or {}
-        workspace = Path(phases['precheck']['workspace']).resolve()
+        workspace = resolve_reference(phases['precheck']['workspace'], Path(self.path).resolve().parent).resolve()
         if (not workspace.is_relative_to(Path(self.path).resolve().parent / 'daily-delivery') or
-                not runner.get('validated') or Path(runner.get('workspace', '')).resolve() != workspace):
+                not runner.get('validated') or resolve_reference(runner.get('workspace', ''), Path(self.path).resolve().parent).resolve() != workspace):
             raise ValueError('复用验证必须来自此次隔离候选的实际 Eval')
         from .daily_delivery import manifest
         if manifest(workspace, Path(self.path).resolve().parent) != phases['eval'].get('candidate_manifest'):
             raise ValueError('流程执行后候选发生变化，请重新复验')
+        self._check_v2_evidence(binding, phases, workspace, task)
+
+    def _check_v2_evidence(self, binding, phases, workspace, task):
+        if not any((a['snapshot'].get('recipe') or {}).get('schema_version') == 2 for a in binding['assets']):
+            return
+        execution = phases['implement']
+        artifact = execution.get('diff_artifact') or {}
+        runtime = Path(self.path).resolve().parent
+        file = resolve_reference(artifact.get('path', ''), runtime)
+        if (not execution.get('changed_files') or not file.is_file() or not file.resolve().is_relative_to(runtime)
+                or hashlib.sha256(file.read_bytes()).hexdigest() != artifact.get('sha256')):
+            raise ValueError('流程缺少可核对的实际 Diff 证据')
+        runner = (task.get('result') or {}).get('runner') or {}
+        process = resolve_reference(runner.get('process_path', ''), runtime)
+        if (runner.get('process_returncode') != 0 or not process.is_file()
+                or not process.resolve().is_relative_to(runtime)
+                or hashlib.sha256(process.read_bytes()).hexdigest() != runner.get('process_sha256')):
+            raise ValueError('流程缺少实际项目 Eval 进程证据')
+        for phase in ('precheck', 'implement', 'eval'):
+            recorded = phases[phase].get('phase_contract')
+            if not isinstance(recorded, dict):
+                raise ValueError('流程缺少实际阶段约束证据')
+            if any(c.get('passed') is not True for c in recorded.get('checks', [])):
+                raise ValueError('流程阶段约束未通过')
+            expected_checks, expected_files = [], []
+            for entry in binding['assets']:
+                recipe = entry['snapshot'].get('recipe') or {}
+                if recipe.get('schema_version') != 2:
+                    continue
+                recipe = self.expanded_recipe(entry['snapshot'], entry['parameters'])
+                expected_checks += [(c['kind'], c['path']) for c in recipe['stage_checks'][phase]]
+                expected_files += [f['path'] for f in recipe['required_files'] if f['phase'] == phase]
+            if (sorted(expected_checks) != sorted((c.get('kind'), c.get('path')) for c in recorded.get('checks', []))
+                    or sorted(expected_files) != sorted(f.get('path') for f in recorded.get('required_files', []))):
+                raise ValueError('流程缺少已声明的阶段检查或必需文件证据')
+            # Earlier phase files may legitimately change in a later phase.
+            # Required files must still match the latest declared producing phase.
+            for item in recorded.get('required_files', []):
+                later = phase == 'implement' and any(f.get('path') == item['path']
+                    for f in phases['eval'].get('phase_contract', {}).get('required_files', []))
+                if not later and hashlib.sha256(checked_file(workspace, item['path']).read_bytes()).hexdigest() != item['sha256']:
+                    raise ValueError('流程必需输出在阶段检查后发生变化：' + item['path'])
+        self.check_phase(binding['id'], 'eval', workspace)
 
     def finish(self, task_id, *, note=''):
         with self.tasks.connect() as db:
@@ -506,9 +727,10 @@ class LearningStore:
             return
         passed = task['status'] == 'completed'
         if passed:
+            self.check_acceptance(task_id)
             self.report(task, passing=True)
             with self.tasks.connect() as db:
-                phases = {r['phase']: json.loads(r['payload']) for r in db.execute('SELECT phase,payload FROM learning_runs WHERE binding_id=?', (binding['id'],))}
+                phases = self._execution_phases(db, binding['id'])
             if any(p not in phases or not phases[p].get('passed') for p in ('precheck', 'implement', 'eval')):
                 raise ValueError('缺少实际流程执行与检查证据，不能认定复用通过')
             if not task.get('reviewed_by') or task.get('review_decision') != 'approve':

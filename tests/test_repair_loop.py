@@ -26,7 +26,7 @@ class RepairLoopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / '.git').mkdir()
-            tasks = TaskStore(root / 'workbench.db')
+            tasks = TaskStore(root / 'runtime' / 'workbench.db')
             projects = ProjectStore(tasks.path)
             projects.create('测试项目', root, [], project_id='PROJECT-LOOP', allow_pending_eval=True)
             initiatives = InitiativeStore(tasks.path)

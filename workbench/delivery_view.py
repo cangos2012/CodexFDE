@@ -84,6 +84,7 @@ def _status_view(task: dict) -> dict:
 
 
 def _eval_view(task: dict, *, include_detail: bool) -> dict:
+    from .course_verification import CASE_LABELS, eval_diagnostics
     result = task.get("result") if isinstance(task.get("result"), dict) else {}
     summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
     results = result.get("results") if isinstance(result.get("results"), list) else []
@@ -112,6 +113,12 @@ def _eval_view(task: dict, *, include_detail: bool) -> dict:
         "summary": summary,
         "results": results if include_detail else [],
         "runner": result.get("runner"),
+        "check_labels": {str(item.get("name") or ""): CASE_LABELS.get(item.get("name"), item.get("name"))
+                         for item in results if isinstance(item, dict)},
+        "diagnostics": eval_diagnostics(result),
+        "verification_target": result.get('verification_target') or next(
+            (event.get('evidence') for event in reversed(task.get('events') or [])
+             if event.get('detail') == '课程复验对象已冻结'), None),
     }
 
 

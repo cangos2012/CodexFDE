@@ -1,13 +1,30 @@
 """Process boundary for the independent FlowERP repository."""
 import json
 import os
-from contextlib import closing
+import re
+from contextlib import closing, contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 import sqlite3
 import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+_verification_root = ContextVar('flowerp_verification_root', default=None)
+
+
+class ExternalProjectEnvironmentError(RuntimeError):
+    """The customer interpreter could not load source or dependencies."""
+
+
+@contextmanager
+def verification_project(root):
+    """Bind one task's customer without changing process-wide environment."""
+    token = _verification_root.set(Path(root).resolve() if root else None)
+    try:
+        yield
+    finally:
+        _verification_root.reset(token)
 
 
 def flowerp_root(explicit=None):
@@ -56,11 +73,12 @@ def run(arguments, *, capture=False):
 
 
 def evaluate_case(name):
-    root = Path.cwd().resolve()
-    candidate = (root / 'eval/erp_cases.py').is_file() or (root / '.course/product-source.json').is_file()
+    bound = _verification_root.get()
+    root = bound or Path.cwd().resolve()
+    candidate = bound is None and ((root / 'eval/erp_cases.py').is_file() or (root / '.course/product-source.json').is_file())
     if candidate and (not (root / 'flowerp/__init__.py').is_file() or not (root / 'eval/erp_cases.py').is_file()):
         raise AssertionError('课程候选缺少业务源码或检查，不能回退到正式项目')
-    if not candidate:
+    if not candidate and bound is None:
         root = flowerp_root()
     # Load the product checks explicitly: a course snapshot also has controller Eval.
     checks = root / 'eval/erp_cases.py'
@@ -78,6 +96,9 @@ print(json.dumps({'evidence': getattr(module, sys.argv[2])()}, ensure_ascii=Fals
     args = [sys.executable if candidate else python_for(root), '-X', 'utf8', '-c', script, str(checks), name]
     result = subprocess.run(args, cwd=root, capture_output=True, text=True, encoding='utf-8', timeout=180)
     if result.returncode:
+        if any(re.match(r'^(ModuleNotFoundError|ImportError|SyntaxError|IndentationError|TabError|FileNotFoundError|PermissionError):', line)
+               for line in result.stderr.splitlines()):
+            raise ExternalProjectEnvironmentError(f'FlowERP 检查环境不可用：{name}（退出码 {result.returncode}）\n{result.stderr[-4000:]}')
         raise AssertionError(f'FlowERP 检查失败：{name}（退出码 {result.returncode}）\n{result.stderr[-4000:]}')
     evidence = json.loads(result.stdout.splitlines()[-1])['evidence']
     return f'FlowERP：{root}；{name}；退出码 0；{evidence}'

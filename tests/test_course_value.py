@@ -15,9 +15,12 @@ ROOT = Path(__file__).resolve().parents[1]
 class CourseValueTests(unittest.TestCase):
     def test_value_standard_is_not_end_state_green(self) -> None:
         text = (ROOT / "docs" / "README.md").read_text(encoding="utf-8")
-        self.assertIn("不能替代你亲手留下的红灯", text)
+        self.assertRegex(text, r"参考实现[^。\n]*不能替代[^。\n]*你自己的[^。\n]*复验")
+        self.assertRegex(text, r"退出码[^。\n]*失败后状态")
+        self.assertIn("不伪造红灯", text)
+        self.assertRegex(text, r"Diff[^。\n]*当前报告[^。\n]*具名人员")
         self.assertIn("8001", text)
-        self.assertIn("隔离工作区", text)
+        self.assertRegex(text, r"隔离(?:工作区|候选)")
 
     def test_identity_copy_separates_workbench_from_customer_project(self) -> None:
         workbench = (ROOT / "workbench_web" / "index.html").read_text(encoding="utf-8")

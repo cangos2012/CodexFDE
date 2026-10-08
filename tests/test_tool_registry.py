@@ -168,7 +168,11 @@ class AgentLoopTests(unittest.TestCase):
             root = Path(temporary)
             repo = self._repo(root)
             api = HarnessPlatformAPI(root / "harness", repo)
-            report = {"summary": {"decision": "pass", "blocking_failed": 0, "blocking_passed": 1}, "results": []}
+            report = {"summary": {"total": 1, "passed": 1, "decision": "pass",
+                                  "blocking_failed": 0, "observing_failed": 0},
+                      "results": [{"name": "synthetic-command-fixture", "level": "blocking",
+                                   "passed": True,
+                                   "evidence": "Synthetic local fixture; no business or human acceptance."}]}
             script = "import pathlib,sys;pathlib.Path(sys.argv[1]).write_text(" + repr(json.dumps(report)) + ",encoding='utf-8')"
             api.projects.create("Target", str(repo), [sys.executable, "-c", script, "{report_path}"], "PROJECT-TARGET")
             spec_path = api.runtime_dir / "specs" / "TASK-A1B2C3D4E5.md"

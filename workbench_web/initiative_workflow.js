@@ -3,8 +3,41 @@ let initiativeWork = null;
 let initiativeWorkId = null;
 let initiativeWorkTimer = null;
 let initiativeWorkPending = false;
+let initiativeWorkEpoch = 0;
+const initiativeWorkActions = new Map();
 let initiativeWorkRead = 0;
+let initiativeWorkReadable = true;
+let initiativeReadGeneration = 0;
+const workbenchPendingReads = new Map();
+function shareWorkbenchRead(scope, resource, read) {
+  const key=JSON.stringify([scope,resource]);
+  if(workbenchPendingReads.has(key))return workbenchPendingReads.get(key);
+  const pending=read().finally(()=>{if(workbenchPendingReads.get(key)===pending)workbenchPendingReads.delete(key);});
+  workbenchPendingReads.set(key,pending);return pending;
+}
+function invalidateInitiativeReads() {
+  ++initiativeReadGeneration;++initiativeWorkRead;
+  if(typeof platformState!=='undefined'){++platformState.runtimeRead;++platformState.deploymentRead;++platformState.planRead;}
+}
+function invalidateInitiativeWork(message, clear=false) {
+  initiativeWorkReadable=false;
+  iw('error').textContent=message;
+  iw('stage').textContent='状态不可读';
+  document.getElementById('initiative-work').querySelectorAll?.('button').forEach(button=>button.disabled=true);
+  if(clear) {
+    ['proposal','result','delivery','findings'].forEach(id=>iw(id).hidden=true);
+    ['documents','invocation','progress','checks','diff','result-summary','latest-answer',
+      'learning-generation-evidence','learning-generation-status','learning-summary','learning-evidence','learning-assets','learning-matches'].forEach(id=>{if(iw(id))iw(id).textContent='';});
+    iw('history').replaceChildren();iw('answers').replaceChildren();
+    iw('preview-link').hidden=true;iw('preview-frame').hidden=true;iw('preview-frame').removeAttribute('src');
+  }
+  if(typeof invalidatePlatformRuntime==='function')invalidatePlatformRuntime(message);
+}
 const iw = id => document.getElementById('iw-' + id);
+function initiativeReviewBase(data) {
+  const evidence=data.eval_harness || {},runner=evidence.runner || {};
+  return [data.active_task_id || data.task?.id || '',runner.candidate_sha256 || '',runner.report_path || '',evidence.generated_at ?? null];
+}
 const iwStages = {queued:'已排队，等待执行',cancelling:'正在取消并保留证据',cancelled:'已取消，可重新调研',interrupted:'服务重启，本轮中断，请核对后重试',released:'已发布，效果待观察',observed:'已回收实际效果',idle:'先让 Codex 检查已有实现',researching:'Codex 正在调研与整理问题',clarifying:'等待你回答业务问题',ready:'方案已提出，等待你确认',confirmed:'目标已确认，等待授权执行',executing:'正在修改与独立复验',review:'本轮候选等待验收',rework:'本轮需要修订，可在这里反馈',accepted:'候选已接受，等待确认集成',integrating:'正在核对并集成',integrated:'已集成到当前项目源码',failed:'本轮已停止，原记录保留'};
 function iwList(id, values) {
   iw(id).replaceChildren();
@@ -17,7 +50,7 @@ function iwDiscussionText(extra='') {
 }
 function renderIwAnswers(data, busy) {
   const questions=data.stage==='clarifying' ? data.proposal?.questions || [] : [];
-  const signature=JSON.stringify([data.id,questions]);
+  const signature=JSON.stringify([data.id,data.document_version || 0,questions]);
   const box=iw('answers');
   // Polling must not overwrite an answer while the user is typing.
   if(box.dataset.questions!==signature && !busy) {
@@ -34,6 +67,13 @@ function renderIwAnswers(data, busy) {
   iw('defer-people').disabled=initiativeWorkPending || !data.enabled;
 }
 function renderInitiativeWork(data) {
+  if(typeof WorkbenchDrafts!=='undefined')WorkbenchDrafts.flush();
+  if(initiativeWork && (initiativeWork.id!==data.id ||
+      JSON.stringify(initiativeReviewBase(initiativeWork))!==JSON.stringify(initiativeReviewBase(data)))) {
+    if(typeof WorkbenchDrafts!=='undefined')WorkbenchDrafts.detach(['review']);
+    iw('note').value='';
+  }
+  if(initiativeWorkReadable)document.getElementById('initiative-work').querySelectorAll?.('button').forEach(button=>button.disabled=false);
   renderEvalHarness(data);
   const loop=data.repair_loop || {config:{},history:[]};
   iw('loop-status').textContent=(loop.config.enabled ? '停止闸门已启用 · ' : '当前仅观察，停止闸门未启用 · ')+
@@ -126,7 +166,7 @@ function renderInitiativeWork(data) {
     iw('checks').textContent=JSON.stringify({summary,changed_files:task.changed_files,events:task.events},null,2);
     const packaged=task.events.some(event=>event.detail==='日常研发交付包已保存');
     iw('patch').hidden=!packaged;iw('patch').href='/api/v1/tasks/'+task.id+'/patch';
-    iw('preview').hidden=!['review','accepted','integrated'].includes(data.stage) || !!(data.project && data.project.id!=='PROJECT-FLOWERP');iw('preview').disabled=initiativeWorkPending;
+    iw('preview').hidden=!['review','accepted','integrated'].includes(data.stage);iw('preview').disabled=initiativeWorkPending;
     iw('accept').hidden=data.stage!=='review';iw('accept').disabled=initiativeWorkPending ||
       ['stale','unavailable'].includes(data.eval_harness?.freshness) || !!data.eval_harness?.error;
     iw('note').disabled=data.stage!=='review';
@@ -148,43 +188,101 @@ function renderInitiativeWork(data) {
   });
   }
   renderDeliveryWorkspace(data);
+  if(typeof renderPlatformWorkflow==='function')renderPlatformWorkflow(data);
   if(data.v0){['accept','integrate','preview','execute','discuss'].forEach(id=>iw(id).hidden=true);}
+  if(typeof trackWorkflowDrafts==='function')trackWorkflowDrafts(data);
+  if(!initiativeWorkReadable)invalidateInitiativeWork('当前记录未完成重新核对，旧结论不可用于授权或验收。');
 }
-async function refreshInitiativeWork() {
-  if(!initiativeWorkId)return;
-  const id=initiativeWorkId, request=++initiativeWorkRead;
-  try {
-    const data=await api('/api/v1/initiatives/'+id+'/workflow');
-    if(id===initiativeWorkId && request===initiativeWorkRead)renderInitiativeWork(data);
-  }catch(error){if(id===initiativeWorkId)iw('error').textContent=error.message;}
+function refreshInitiativeWork({force=false,afterMutation=false}={}) {
+  if(!initiativeWorkId || !afterMutation && (initiativeWorkPending || typeof platformState!=='undefined' && platformState.runtimePending))return Promise.resolve();
+  if(afterMutation)invalidateInitiativeReads();
+  const id=initiativeWorkId,epoch=initiativeWorkEpoch,generation=initiativeReadGeneration;
+  const pending=shareWorkbenchRead([id,epoch,generation],'workflow',async()=>{
+    const request=++initiativeWorkRead;
+    try {
+      const data=await api('/api/v1/initiatives/'+encodeURIComponent(id)+'/workflow');
+      if(id!==initiativeWorkId || epoch!==initiativeWorkEpoch || request!==initiativeWorkRead)return;
+      if(data.id!==id || !data.stage || !Number.isInteger(data.revision))throw new Error('事项证据与请求不一致');
+      initiativeWorkReadable=true;renderInitiativeWork(data);return data;
+    }catch(error){if(id===initiativeWorkId && epoch===initiativeWorkEpoch && request===initiativeWorkRead)invalidateInitiativeWork('读取失败，旧结论不可用于授权或验收：'+error.message);}
+  });
+  return pending.then(data=>{if(data && id===initiativeWorkId && epoch===initiativeWorkEpoch && generation===initiativeReadGeneration && typeof refreshPlatformViews==='function')return refreshPlatformViews({force});});
 }
 function showInitiativeWork(item) {
+  if(typeof WorkbenchDrafts!=='undefined')WorkbenchDrafts.detach(['discussion','review','v0','learning-candidate','learning-decisions']);
   clearInterval(initiativeWorkTimer);initiativeWorkTimer=null;++initiativeWorkRead;
+  ++initiativeWorkEpoch;
   initiativeWorkId=item && item.id;initiativeWork=null;
+  initiativeWorkPending=initiativeWorkActions.has(initiativeWorkId);
+  if(typeof resetPlatformInitiative==='function')resetPlatformInitiative(item);
   document.getElementById('initiative-work').hidden=!item;
   activeIwPane=null;activeIwStage=null;
+  document.getElementById('v0-confirmed').checked=false;
+  ['v0-spec','v0-workspace','v0-files','iw-message','iw-note','iw-next',
+    'iw-release-version','iw-release-environment','iw-release-evidence',
+    'iw-outcome-period','iw-outcome-target','iw-outcome-actual','iw-outcome-observation','iw-outcome-evidence','iw-outcome-conclusion',
+    ...['task','feedback','supersedes','title','content','applies','excludes','boundary','conflict','parameters','paths','contains','precheck','implement','eval','review','outputs','stop','rollback',
+      'generation-id','evidence-refs','guidance','check-preconditions','check-precheck','check-implement','check-eval','required-implement','required-eval'].map(k=>'iw-learning-'+k)
+  ].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  iw('answers').replaceChildren();delete iw('answers').dataset.questions;
+  iw('learning-kind').value='memory';iw('learning-recipe').hidden=true;
+  if(iw('learning-schema'))iw('learning-schema').value='1';if(iw('learning-v2'))iw('learning-v2').hidden=true;
+  ['task','feedback'].forEach(k=>{iw('learning-'+k).replaceChildren();delete iw('learning-'+k).dataset.sources;delete iw('learning-'+k).dataset.initiative;});
   if(!item)return;
+  invalidateInitiativeWork('正在读取本事项的最新进展…',true);
   iw('message').value='';iw('note').value='';iw('reviewer').value=item.reviewer || '';
   iw('preview-frame').hidden=true;iw('preview-frame').removeAttribute('src');iw('preview-link').hidden=true;iw('preview-status').textContent='';
   refreshInitiativeWork();
   initiativeWorkTimer=setInterval(()=>{if(!document.getElementById('view-decision').hidden && !initiativeWorkPending)refreshInitiativeWork();},2500);
 }
 async function initiativeWorkAction(action, extra={}) {
-  if(!initiativeWork || initiativeWorkPending)return;
-  const itemId=initiativeWorkId;
+  if(!initiativeWork || initiativeWorkPending || initiativeWorkActions.has(initiativeWorkId) || !initiativeWorkReadable)return;
+  const itemId=initiativeWorkId,epoch=initiativeWorkEpoch,token={};
+  const currentView=()=>itemId===initiativeWorkId && epoch===initiativeWorkEpoch;
+  const draftGroup=({discuss:'discussion',accept:'review',v0:'v0'})[action] ||
+    (action==='learning' ? ({create:'learning-candidate',decide:'learning-decisions'})[extra.fields?.action] : null);
+  const draftSnapshot=draftGroup && typeof WorkbenchDrafts!=='undefined' ? WorkbenchDrafts.capture?.(draftGroup) : null;
+  if(action==='accept' && (!extra.note?.trim() || draftSnapshot &&
+      draftSnapshot.base!==JSON.stringify(initiativeReviewBase(initiativeWork)))) {
+    iw('error').textContent='请核对当前候选和 Eval，填写属于本轮的验收意见后再接受。';return;
+  }
+  const discussionInput=()=>({message:iw('message').value,
+    answers:Object.fromEntries([...iw('answers').querySelectorAll('textarea')].map(el=>[el.dataset.question,el.value]))});
+  const submittedDiscussion=action==='discuss' ? JSON.stringify(discussionInput()) : null;
+  const clearDiscussion=()=>{iw('message').value='';iw('answers').querySelectorAll('textarea').forEach(el=>el.value='');};
   let actionError='';
-  initiativeWorkPending=true;renderInitiativeWork(initiativeWork);
+  invalidateInitiativeReads();initiativeWorkActions.set(itemId,token);initiativeWorkPending=true;renderInitiativeWork(initiativeWork);
   try {
-    const data=await api('/api/v1/initiatives/'+itemId+'/workflow/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor:actorName(),revision:initiativeWork.revision,...extra})});
-    if(itemId!==initiativeWorkId)return;
+    const body={actor:actorName(),revision:initiativeWork.revision,...extra};
+    if(action==='learning' && ['generate','cancel_generation'].includes(extra.fields?.action) && typeof platformKey==='function')body.submission_key=platformKey(itemId+'/learning/'+extra.fields.action,body);
+    const path='/api/v1/initiatives/'+itemId+'/workflow/'+action;
+    const data=await (body.submission_key && typeof platformPost==='function' ? platformPost(path,body) : api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}));
+    if(!currentView()){if(draftSnapshot)WorkbenchDrafts.clearSubmitted(draftSnapshot);return;}
+    if(data.id!==itemId || !data.stage || !Number.isInteger(data.revision))throw new Error('事项操作返回了无法核对的记录');
+    invalidateInitiativeReads();initiativeWorkReadable=true;
+    if(draftSnapshot)WorkbenchDrafts.clearSubmitted(draftSnapshot,action==='discuss' ? clearDiscussion : undefined);
+    else if(action==='discuss' && JSON.stringify(discussionInput())===submittedDiscussion)clearDiscussion();
     renderInitiativeWork(data);
-    if(action==='discuss'){iw('message').value='';iw('answers').querySelectorAll('textarea').forEach(el=>el.value='');}
     if(action==='confirm') {
-      currentInitiative=await api('/api/v1/initiatives/'+itemId);
+      const confirmed=await api('/api/v1/initiatives/'+itemId);
+      if(!currentView())return;
+      currentInitiative=confirmed;
       document.getElementById('initiative-decision').hidden=true;
     }
-  }catch(error){actionError=error.message;}
-  finally{initiativeWorkPending=false;if(initiativeWork)renderInitiativeWork(initiativeWork);if(actionError)iw('error').textContent=actionError;}
+    if(typeof refreshPlatformViews==='function')await refreshPlatformViews({force:true});
+    return true;
+  }catch(error){actionError=error.message;if(currentView())initiativeWorkReadable=false;}
+  finally{
+    if(typeof WorkbenchDrafts!=='undefined')WorkbenchDrafts.flush();
+    if(initiativeWorkActions.get(itemId)===token)initiativeWorkActions.delete(itemId);
+    if(itemId===initiativeWorkId){
+      initiativeWorkPending=initiativeWorkActions.has(itemId);
+      if(currentView()){
+        if(initiativeWork)renderInitiativeWork(initiativeWork);
+        if(actionError)invalidateInitiativeWork('操作结果待核对，请刷新本事项后再决定：'+actionError);
+      }else if(!initiativeWorkPending)void refreshInitiativeWork();
+    }
+  }
 }
 function initInitiativeWork() {
   iw('eval-run').onclick=()=>initiativeWorkAction('eval');
@@ -201,13 +299,17 @@ function initInitiativeWork() {
   };
   iw('hook-prepare').onclick=()=>initiativeWorkAction('prepare-hook');
   if(typeof initLearning==='function')initLearning();
+  if(typeof initPlatform==='function')initPlatform();
   document.getElementById('v0-submit').onclick=async()=>{
     const value=id=>document.getElementById(id).value;
     if(!document.getElementById('v0-confirmed').checked){document.getElementById('v0-status').textContent='请先核对并确认本次合同和执行参数。';return;}
-    await initiativeWorkAction('v0', {spec_text:value('v0-spec'), execution_mode:value('v0-mode'),
+    const extra={spec_text:value('v0-spec'), execution_mode:value('v0-mode'),
       workspace_path:value('v0-workspace').trim(), write_scope:value('v0-files').split(/\r?\n/).map(v=>v.trim()).filter(Boolean),
-      execution_timeout_seconds:Number(value('v0-timeout')), confirmed:true});
-    document.getElementById('v0-confirmed').checked=false;
+      execution_timeout_seconds:Number(value('v0-timeout')), confirmed:true};
+    const text=extra.spec_text, payload=JSON.stringify({actor:document.getElementById('task-actor').value.trim(),revision:initiativeWork?.revision,...extra});
+    if([...text].length>24000){document.getElementById('v0-status').textContent='合同最多 24,000 个字符。输入已保留，请缩短后提交。';return;}
+    if(new TextEncoder().encode(payload).length>524288){document.getElementById('v0-status').textContent='本次请求超过 512 KiB。输入已保留，请缩短路径或范围内容。';return;}
+    if(await initiativeWorkAction('v0',extra))document.getElementById('v0-confirmed').checked=false;
   };
   document.getElementById('v0-open-task').onclick=()=>{
     if(initiativeWork && initiativeWork.task)loadDetail(initiativeWork.task.id);
@@ -226,18 +328,7 @@ function initInitiativeWork() {
   iw('execute').onclick=()=>initiativeWorkAction('execute');
   iw('accept').onclick=()=>initiativeWorkAction('accept',{note:iw('note').value.trim()});
   iw('integrate').onclick=()=>initiativeWorkAction('integrate');
-  iw('preview').onclick=async()=>{
-    if(!initiativeWork || !initiativeWork.task)return;
-    const taskId=initiativeWork.task.id;iw('preview').disabled=true;iw('preview-status').textContent='正在启动本事项的隔离候选…';
-    try {
-      const result=await api('/api/v1/tasks/'+taskId+'/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor:actorName()})});
-      if(!initiativeWork.task || initiativeWork.task.id!==taskId)return;
-      // FlowERP forbids framing. Keep its protections and offer a top-level view.
-      iw('preview-frame').hidden=true;iw('preview-frame').removeAttribute('src');
-      iw('preview-link').href=result.url;iw('preview-link').hidden=false;
-      iw('preview-status').textContent='候选已就绪，请从下方链接在独立窗口验收。'+result.notice;
-    }catch(error){iw('preview-status').textContent=error.message;}finally{iw('preview').disabled=false;}
-  };
+  iw('preview').onclick=()=>openPlatformPreview();
 }
 
 function renderQualityHook(data) {
@@ -297,7 +388,7 @@ function renderEvalHarness(data) {
 let activeIwPane=null, activeIwStage=null;
 function selectIwPane(pane) {
   activeIwPane=pane;
-  ['action','plan','result'].forEach(key=>{
+  ['action','plan','result','runtime'].forEach(key=>{
     iw('pane-'+key).hidden=key!==pane;
     const button=document.querySelector('[data-iw-pane="'+key+'"]');
     button.classList.toggle('active',key===pane);button.setAttribute('aria-pressed',String(key===pane));

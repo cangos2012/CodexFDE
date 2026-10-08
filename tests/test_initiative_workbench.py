@@ -150,7 +150,11 @@ class InitiativePlatformAPITests(unittest.TestCase):
             root = Path(temporary)
             repo = self._repo(root)
             api = HarnessPlatformAPI(root / "harness", repo)
-            report = {"summary": {"decision": "pass", "blocking_failed": 0}, "results": []}
+            report = {"summary": {"total": 1, "passed": 1, "decision": "pass",
+                                  "blocking_failed": 0, "observing_failed": 0},
+                      "results": [{"name": "synthetic-command-fixture", "level": "blocking",
+                                   "passed": True,
+                                   "evidence": "Synthetic local fixture; no business or human acceptance."}]}
             script = (
                 "import pathlib,sys;pathlib.Path(sys.argv[1]).write_text("
                 + repr(json.dumps(report)) + ",encoding='utf-8')"
@@ -189,7 +193,10 @@ class InitiativePlatformAPITests(unittest.TestCase):
             self.assertEqual(202, repeated.status)
             self.assertEqual(task_id, repeated.body["task"]["id"])
             self.assertEqual(1, len(api.tasks.list()))
-            api.automation.wait(task_id, 5)
+            finished = api.automation.wait(task_id, 5)
+            self.assertEqual("review", finished["status"], finished.get("error"))
+            self.assertTrue(finished["result"]["runner"]["validated"])
+            self.assertEqual(report["results"], finished["result"]["results"])
 
     def test_stale_decision_version_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

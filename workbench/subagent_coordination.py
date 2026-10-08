@@ -2,13 +2,26 @@ from __future__ import annotations
 
 import json
 import uuid
+import threading
+import time
+import os
+from functools import wraps
 from datetime import datetime, timezone
 from pathlib import Path
 
 from agent.schedule import Subtask, assert_parallel_safe
+from .file_io import read_text
 
 
 _STATES = {"planned", "running", "completed", "failed"}
+
+
+def _serialized(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self.lock:
+            return method(self, *args, **kwargs)
+    return wrapped
 
 
 def _now() -> str:
@@ -16,7 +29,7 @@ def _now() -> str:
 
 
 def _read_json(path: Path) -> dict:
-    value = json.loads(path.read_text(encoding="utf-8"))
+    value = json.loads(read_text(path, encoding="utf-8"))
     if not isinstance(value, dict):
         raise ValueError("SubAgent 清单必须是 JSON 对象")
     return value
@@ -28,12 +41,30 @@ class SubagentCoordinator:
     def __init__(self, runtime_dir: str | Path) -> None:
         self.root = Path(runtime_dir).resolve() / "subagents"
         self.root.mkdir(parents=True, exist_ok=True)
+        self.lock = threading.RLock()
+
+    def _write(self, plan):
+        path = self._path(plan['id'])
+        temporary = path.with_suffix('.' + uuid.uuid4().hex + '.tmp')
+        try:
+            temporary.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding='utf-8')
+            for attempt in range(6):
+                try:
+                    temporary.replace(path)
+                    return
+                except PermissionError:
+                    if os.name != 'nt' or attempt == 5:
+                        raise
+                    time.sleep(.05 * 2 ** attempt)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def _path(self, plan_id: str) -> Path:
         if not plan_id.startswith("SUBAGENT-") or any(char in plan_id for char in "/\\"):
             raise ValueError("无效的 SubAgent 计划编号")
         return self.root / f"{plan_id}.json"
 
+    @_serialized
     def create(self, manifest_path: str | Path) -> dict:
         manifest = _read_json(Path(manifest_path))
         candidate = Path(str(manifest.get("candidate_path") or ""))
@@ -92,7 +123,7 @@ class SubagentCoordinator:
             "subtasks": contracts,
             "events": [{"at": _now(), "kind": "plan/created", "actor": "workbench"}],
         }
-        self._path(plan_id).write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+        self._write(plan)
         return plan
 
     def get(self, plan_id: str) -> dict:
@@ -101,6 +132,7 @@ class SubagentCoordinator:
             raise KeyError(plan_id)
         return _read_json(path)
 
+    @_serialized
     def record(self, plan_id: str, name: str, status: str, actor: str, evidence: tuple[str, ...] = ()) -> dict:
         if status not in _STATES - {"planned"}:
             raise ValueError("活动状态必须是 running、completed 或 failed")
@@ -136,9 +168,10 @@ class SubagentCoordinator:
             "at": now, "kind": "subtask/status", "actor": subtask["actor"],
             "subtask": name, "from": previous, "to": status, "evidence": evidence_paths,
         })
-        self._path(plan_id).write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+        self._write(plan)
         return plan
 
+    @_serialized
     def finalize(self, plan_id: str, actor: str) -> dict:
         plan = self.get(plan_id)
         if any(item["status"] != "completed" for item in plan["subtasks"]):
@@ -158,5 +191,5 @@ class SubagentCoordinator:
             raise ValueError("活动时间没有重叠，不能声称发生真实并行")
         plan["status"] = "ready_for_serial_integration"
         plan["events"].append({"at": _now(), "kind": "plan/finalized", "actor": actor, "overlap_proved": True})
-        self._path(plan_id).write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+        self._write(plan)
         return plan

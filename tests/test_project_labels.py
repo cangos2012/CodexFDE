@@ -12,7 +12,7 @@ class ProjectLabelTests(unittest.TestCase):
             first, second = root / 'workbench', root / 'erp'
             for path in (first, second):
                 (path / '.git').mkdir(parents=True)
-            store = ProjectStore(root / 'registry.db')
+            store = ProjectStore(root / 'runtime' / 'registry.db')
             old = store.create('课程参考', first, ['python', 'check.py'])
             new = store.create('FlowERP', second, ['python', 'check.py'])
             self.assertIsNone(store.default())
@@ -28,7 +28,7 @@ class ProjectLabelTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / '.git').mkdir()
-            store = ProjectStore(root / 'workbench.db')
+            store = ProjectStore(root / 'runtime' / 'workbench.db')
             original = store.create('FlowERP', root, ['python', '-m', 'eval.harness'])
             changed = store.rename(original['id'], '个人研发工作台')
             self.assertEqual('个人研发工作台', changed['name'])

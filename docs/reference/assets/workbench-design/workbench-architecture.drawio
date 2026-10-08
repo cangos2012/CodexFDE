@@ -1,0 +1,156 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="drawio" version="31.4.4">
+  <diagram id="模块职责与数据归属" name="模块职责与数据归属">
+    <mxGraphModel dx="1600" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1860" pageHeight="1440" math="0" shadow="0" background="#ffffff">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="个人研发工作台：模块职责与数据归属示意" style="text;whiteSpace=wrap;html=1;strokeColor=none;fillColor=none;fontFamily=Microsoft YaHei;fontSize=30;fontColor=#243746;align=left;verticalAlign=middle;spacing=0;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="20" width="1740" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" value="用工作台组织人与 Codex 协同交付；FlowERP 是独立客户项目与验证场。" style="text;whiteSpace=wrap;html=1;strokeColor=none;fillColor=none;fontFamily=Microsoft YaHei;fontSize=21;fontColor=#243746;align=left;verticalAlign=middle;spacing=0;fontStyle=0;" vertex="1" parent="1">
+          <mxGeometry x="40" y="85" width="1740" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="human" value="人&lt;br&gt;提出需求 · 授权 · 具名审核" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=19;fontColor=#172b4d;spacing=14;" vertex="1" parent="1">
+          <mxGeometry x="40" y="150" width="330" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="workbench" value="本仓库：个人研发工作台（默认 :8001，入口 /）" style="swimlane;startSize=45;horizontal=1;rounded=1;arcSize=4;html=1;container=1;pointerEvents=0;fillColor=#f6f9fd;swimlaneFillColor=#ffffff;strokeColor=#9aafc6;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontColor=#243746;fontSize=20;fontStyle=1;spacingLeft=16;" vertex="1" parent="1">
+          <mxGeometry x="40" y="320" width="1080" height="800" as="geometry" />
+        </mxCell>
+        <mxCell id="web" value="&lt;b&gt;首页与操作界面&lt;/b&gt;&lt;br&gt;workbench_web/ · 事项与决策" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=19;fontColor=#172b4d;spacing=14;" vertex="1" parent="workbench">
+          <mxGeometry x="50" y="70" width="960" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="server" value="&lt;b&gt;HTTP 路由与应用装配&lt;/b&gt;&lt;br&gt;workbench/workbench_server.py" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=19;fontColor=#172b4d;spacing=14;" vertex="1" parent="workbench">
+          <mxGeometry x="50" y="220" width="960" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="learning" value="&lt;b&gt;经验与流程&lt;/b&gt;&lt;br&gt;learning.py / evolution.py&lt;br&gt;来源 · 版本 · 采用 · 失效" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=19;fontColor=#172b4d;spacing=14;" vertex="1" parent="workbench">
+          <mxGeometry x="50" y="440" width="280" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="initiative" value="&lt;b&gt;事项与决策&lt;/b&gt;&lt;br&gt;initiative*.py&lt;br&gt;目标 · 调研 · 方案确认" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=19;fontColor=#172b4d;spacing=14;" vertex="1" parent="workbench">
+          <mxGeometry x="390" y="440" width="280" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="control" value="&lt;b&gt;受控交付&lt;/b&gt;&lt;br&gt;daily_delivery / workflow&lt;br&gt;execution&lt;br&gt;Spec · 写集 · Eval · 人审" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=19;fontColor=#172b4d;spacing=14;fontSize=18;" vertex="1" parent="workbench">
+          <mxGeometry x="730" y="440" width="280" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="db" value="&lt;b&gt;workbench.db&lt;/b&gt;&lt;br&gt;事项、任务、决定、经验版本&lt;br&gt;记录及绑定；归工作台所有" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=19;fontColor=#172b4d;spacing=14;" vertex="1" parent="workbench">
+          <mxGeometry x="50" y="650" width="450" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="evidence" value="&lt;b&gt;运行证据文件&lt;/b&gt;&lt;br&gt;Spec 快照 · Diff · 哈希&lt;br&gt;进程记录 · Eval 报告" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=19;fontColor=#172b4d;spacing=14;" vertex="1" parent="workbench">
+          <mxGeometry x="610" y="650" width="400" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="processes" value="工作台调用的独立执行进程" style="swimlane;startSize=45;horizontal=1;rounded=1;arcSize=4;html=1;container=1;pointerEvents=0;fillColor=#f6f9fd;swimlaneFillColor=#ffffff;strokeColor=#9aafc6;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontColor=#243746;fontSize=20;fontStyle=1;spacingLeft=16;" vertex="1" parent="1">
+          <mxGeometry x="1220" y="320" width="590" height="610" as="geometry" />
+        </mxCell>
+        <mxCell id="codex" value="&lt;b&gt;Codex CLI&lt;/b&gt;&lt;br&gt;在候选中按确认的写集修改&lt;br&gt;留下实际 Diff、清单与执行结果" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=19;fontColor=#172b4d;spacing=14;" vertex="1" parent="processes">
+          <mxGeometry x="40" y="90" width="510" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="candidate-code" value="&lt;b&gt;同一隔离候选源码&lt;/b&gt;&lt;br&gt;写集 · 候选清单 · 哈希 · Diff" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=19;fontColor=#172b4d;spacing=14;" vertex="1" parent="processes">
+          <mxGeometry x="40" y="270" width="510" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="eval" value="&lt;b&gt;登记项目的阻断 Eval&lt;/b&gt;&lt;br&gt;按登记入口，在上述候选启动进程&lt;br&gt;检查退出码与报告结论一致" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=19;fontColor=#172b4d;spacing=14;" vertex="1" parent="processes">
+          <mxGeometry x="40" y="420" width="510" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="flowerp" value="&lt;b&gt;独立 FlowERP 原项目&lt;/b&gt;&lt;br&gt;源码：flowerp/ 与 web/&lt;br&gt;客户服务 :8000 · 业务库 flowerp.db&lt;br&gt;业务状态与审批由客户项目负责" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=19;fontColor=#172b4d;spacing=14;" vertex="1" parent="1">
+          <mxGeometry x="1260" y="1000" width="510" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="human-web" value="提交事项 / 作出决定" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#526d82;fontFamily=Microsoft YaHei;fontSize=17;fontColor=#243746;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.18;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="human" target="web">
+          <mxGeometry relative="1" x="0" y="0" as="geometry">
+            <Array as="points">
+              <mxPoint x="205" y="290" />
+              <mxPoint x="260" y="290" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="web-server" value="HTTP API" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#526d82;fontFamily=Microsoft YaHei;fontSize=17;fontColor=#243746;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="web" target="server">
+          <mxGeometry relative="1" x="0" y="0" as="geometry" />
+        </mxCell>
+        <mxCell id="route-learning" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#526d82;fontFamily=Microsoft YaHei;fontSize=17;fontColor=#243746;labelBackgroundColor=#ffffff;exitX=0.15;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="server" target="learning">
+          <mxGeometry relative="1" x="0" y="0" as="geometry" />
+        </mxCell>
+        <mxCell id="route-initiative" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#526d82;fontFamily=Microsoft YaHei;fontSize=17;fontColor=#243746;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="server" target="initiative">
+          <mxGeometry relative="1" x="0" y="0" as="geometry" />
+        </mxCell>
+        <mxCell id="route-control" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#526d82;fontFamily=Microsoft YaHei;fontSize=17;fontColor=#243746;labelBackgroundColor=#ffffff;exitX=0.85;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="server" target="control">
+          <mxGeometry relative="1" x="0" y="0" as="geometry" />
+        </mxCell>
+        <mxCell id="learning-db" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#526d82;fontFamily=Microsoft YaHei;fontSize=17;fontColor=#243746;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.25;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="learning" target="db">
+          <mxGeometry relative="1" x="0" y="0" as="geometry" />
+        </mxCell>
+        <mxCell id="initiative-db" value="状态与决定" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#526d82;fontFamily=Microsoft YaHei;fontSize=17;fontColor=#243746;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.8;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="initiative" target="db">
+          <mxGeometry relative="1" x="0" y="0" as="geometry">
+            <Array as="points">
+              <mxPoint x="570" y="930" />
+              <mxPoint x="450" y="930" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="control-evidence" value="绑定候选与报告" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#526d82;fontFamily=Microsoft YaHei;fontSize=17;fontColor=#243746;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.65;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="control" target="evidence">
+          <mxGeometry relative="1" x="0" y="0" as="geometry" />
+        </mxCell>
+        <mxCell id="control-codex" value="确认方案与写集" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#526d82;fontFamily=Microsoft YaHei;fontSize=17;fontColor=#243746;labelBackgroundColor=#ffffff;exitX=1;exitY=0.22;exitDx=0;exitDy=0;entryX=0;entryY=0.75;entryDx=0;entryDy=0;" edge="1" parent="1" source="control" target="codex">
+          <mxGeometry relative="1" x="0" y="0" as="geometry">
+            <Array as="points">
+              <mxPoint x="1170" y="790" />
+              <mxPoint x="1170" y="515" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="control-eval" value="发起检查" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#526d82;fontFamily=Microsoft YaHei;fontSize=17;fontColor=#243746;labelBackgroundColor=#ffffff;exitX=1;exitY=0.75;exitDx=0;exitDy=0;entryX=0;entryY=0.4;entryDx=0;entryDy=0;" edge="1" parent="1" source="control" target="eval">
+          <mxGeometry relative="1" x="0" y="0" as="geometry">
+            <Array as="points">
+              <mxPoint x="1190" y="865" />
+              <mxPoint x="1190" y="788" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="codex-candidate" value="修改候选" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#526d82;fontFamily=Microsoft YaHei;fontSize=17;fontColor=#243746;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="codex" target="candidate-code">
+          <mxGeometry relative="1" x="0" y="0" as="geometry" />
+        </mxCell>
+        <mxCell id="candidate-eval" value="验证候选" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#526d82;fontFamily=Microsoft YaHei;fontSize=17;fontColor=#243746;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="candidate-code" target="eval">
+          <mxGeometry relative="1" x="0" y="0" as="geometry" />
+        </mxCell>
+        <mxCell id="eval-evidence" value="保存检查结果" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#526d82;fontFamily=Microsoft YaHei;fontSize=17;fontColor=#243746;labelBackgroundColor=#ffffff;exitX=0;exitY=0.85;exitDx=0;exitDy=0;entryX=1;entryY=0.25;entryDx=0;entryDy=0;" edge="1" parent="1" source="eval" target="evidence">
+          <mxGeometry relative="1" x="0" y="0" as="geometry">
+            <Array as="points">
+              <mxPoint x="1210" y="842" />
+              <mxPoint x="1210" y="998" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="project-eval" value="提供 Eval 入口与运行配置" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#526d82;fontFamily=Microsoft YaHei;fontSize=17;fontColor=#243746;labelBackgroundColor=#ffffff;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="flowerp" target="eval">
+          <mxGeometry relative="1" x="0" y="0" as="geometry" />
+        </mxCell>
+        <mxCell id="control-project" value="具名接受后，显式集成源码" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#526d82;fontFamily=Microsoft YaHei;fontSize=17;fontColor=#243746;labelBackgroundColor=#ffffff;exitX=0;exitY=0.9;exitDx=0;exitDy=0;entryX=0;entryY=0.53;entryDx=0;entryDy=0;dashed=1;dashPattern=6 4;" edge="1" parent="1" source="control" target="flowerp">
+          <mxGeometry relative="1" x="0" y="0" as="geometry">
+            <Array as="points">
+              <mxPoint x="740" y="886" />
+              <mxPoint x="740" y="930" />
+              <mxPoint x="600" y="930" />
+              <mxPoint x="600" y="1190" />
+              <mxPoint x="1100" y="1190" />
+              <mxPoint x="1100" y="1090" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="optional" value="可选驾驶舱 harness_web/（默认 :8010）不进入必做主线。" style="text;whiteSpace=wrap;html=1;strokeColor=none;fillColor=none;fontFamily=Microsoft YaHei;fontSize=19;fontColor=#243746;align=left;verticalAlign=middle;spacing=0;fontStyle=0;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1330" width="1080" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="boundary" value="图中箭头表示职责协作、进程调用或证据归属；不等于全部模块依赖已强制单向分层。&#10;软件审核通过与客户业务审批分别保留证据。" style="text;whiteSpace=wrap;html=1;strokeColor=none;fillColor=none;fontFamily=Microsoft YaHei;fontSize=19;fontColor=#243746;align=left;verticalAlign=middle;spacing=0;fontStyle=0;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1250" width="1770" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-human" value="具名人的决定" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=19;fontColor=#172b4d;spacing=14;fontSize=17;spacing=6;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1370" width="360" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-service" value="工作台职责" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=19;fontColor=#172b4d;spacing=14;fontSize=17;spacing=6;" vertex="1" parent="1">
+          <mxGeometry x="460" y="1370" width="360" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-data" value="持久化与证据" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=19;fontColor=#172b4d;spacing=14;fontSize=17;spacing=6;" vertex="1" parent="1">
+          <mxGeometry x="880" y="1370" width="360" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-external" value="独立项目 / 进程" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;strokeWidth=1.5;fontFamily=Microsoft YaHei;fontSize=19;fontColor=#172b4d;spacing=14;fontSize=17;spacing=6;" vertex="1" parent="1">
+          <mxGeometry x="1300" y="1370" width="360" height="50" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

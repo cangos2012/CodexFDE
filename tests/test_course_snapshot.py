@@ -8,12 +8,36 @@ from unittest.mock import patch
 from pathlib import Path
 
 from workbench.course_snapshot import prepare_source_snapshot
+from workbench.file_io import read_bytes
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class SourceSnapshotTests(unittest.TestCase):
+    def test_l01_snapshot_retains_later_zsh_helper_and_git_line_endings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'controller'
+            source.mkdir()
+            self.source(source)
+            helper_name = 'docs/courses/L05/examples/session.zsh'
+            helper = source / helper_name
+            helper.parent.mkdir(parents=True)
+            helper.write_bytes((ROOT / helper_name).read_bytes())
+            attributes = source / '.gitattributes'
+            attributes.write_bytes((ROOT / '.gitattributes').read_bytes())
+
+            result = prepare_source_snapshot(source, source / '.runtime', 1)
+            candidate = Path(result['path'])
+            self.assertEqual(helper.read_bytes(), (candidate / helper_name).read_bytes())
+            self.assertEqual(attributes.read_bytes(), (candidate / '.gitattributes').read_bytes())
+            self.assertIn(helper_name, result['source_manifest'])
+            self.assertIn('.gitattributes', result['source_manifest'])
+            check = subprocess.run(['git', 'check-attr', 'eol', '--', helper_name],
+                                   cwd=candidate, text=True, capture_output=True, check=False)
+            self.assertEqual(0, check.returncode, check.stderr)
+            self.assertEqual(helper_name + ': eol: lf', check.stdout.strip())
+
     def test_embedded_product_is_rejected_before_snapshot_writes(self):
         for package in ('flowerp', 'web'):
             with self.subTest(package=package), tempfile.TemporaryDirectory() as directory:
@@ -63,12 +87,12 @@ class SourceSnapshotTests(unittest.TestCase):
             (source / ".env").write_text("private", encoding="utf-8")
             (source / "workbench/private.db").write_text("private", encoding="utf-8")
             (source / "workbench/auth.json").write_text("private", encoding="utf-8")
-            original = (source / "workbench/spec.py").read_bytes()
+            original = read_bytes(source / "workbench/spec.py")
             result = prepare_source_snapshot(source, source / ".runtime", 3)
             target = Path(result["path"])
             self.assertEqual("working_tree_snapshot", result["baseline_semantics"])
             self.assertFalse((source / ".git").exists())
-            self.assertEqual(original, (source / "workbench/spec.py").read_bytes())
+            self.assertEqual(original, read_bytes(source / "workbench/spec.py"))
             self.assertIn("if False and missing", (target / "workbench/spec.py").read_text(encoding="utf-8"))
             self.assertFalse((target / ".env").exists())
             self.assertFalse((target / "workbench/private.db").exists())

@@ -1,0 +1,50 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="drawio" version="26.0.0">
+  <diagram id="L04" name="报告只支持被检查的版本">
+    <mxGraphModel grid="1" gridSize="10" page="1" pageScale="1" pageWidth="1500" pageHeight="880" background="#ffffff">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="heading" value="L04｜报告只支持被检查的版本" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontColor=#17252b;spacing=0;fontSize=32;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="30" width="1420" height="55" />
+        </mxCell>
+        <mxCell id="question" value="目录没变、旧报告通过，为什么还不能直接接受？" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontColor=#17252b;spacing=0;fontSize=23;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="100" width="1420" height="45" />
+        </mxCell>
+        <mxCell id="step-0" value="&lt;b&gt;01 锁定确认合同&lt;/b&gt;&lt;br&gt;&lt;br&gt;Ticket B 读取 L03 确认&lt;br&gt;版 Spec，并保留内容标识。" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;fontFamily=Microsoft YaHei;fontColor=#17252b;fontSize=22;spacing=18;strokeWidth=2;fillColor=#edf5fa;strokeColor=#517b94;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="190" width="310" height="240" />
+        </mxCell>
+        <mxCell id="step-1" value="&lt;b&gt;02 锁定候选内容&lt;/b&gt;&lt;br&gt;&lt;br&gt;记录实际源码版本与 Diff；&lt;br&gt;目录名不能代替内容。" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;fontFamily=Microsoft YaHei;fontColor=#17252b;fontSize=22;spacing=18;strokeWidth=2;fillColor=#edf5fa;strokeColor=#517b94;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="410" y="190" width="310" height="240" />
+        </mxCell>
+        <mxCell id="edge-1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#517b94;strokeWidth=2;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="step-0" target="step-1">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="step-2" value="&lt;b&gt;03 复验当前候选&lt;/b&gt;&lt;br&gt;&lt;br&gt;命令、业务结果与报告，都&lt;br&gt;应属于同一份候选。" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;fontFamily=Microsoft YaHei;fontColor=#17252b;fontSize=22;spacing=18;strokeWidth=2;fillColor=#edf5fa;strokeColor=#517b94;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="780" y="190" width="310" height="240" />
+        </mxCell>
+        <mxCell id="edge-2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#517b94;strokeWidth=2;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="step-1" target="step-2">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="step-3" value="&lt;b&gt;04 具名作出决定&lt;/b&gt;&lt;br&gt;&lt;br&gt;核对范围、失败后状态与当&lt;br&gt;前证据，再接受或打回。" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;fontFamily=Microsoft YaHei;fontColor=#17252b;fontSize=22;spacing=18;strokeWidth=2;fillColor=#edf5fa;strokeColor=#517b94;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1150" y="190" width="310" height="240" />
+        </mxCell>
+        <mxCell id="edge-3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#517b94;strokeWidth=2;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="step-2" target="step-3">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="counterexample" value="&lt;b&gt;排序改了，仍用旧绿灯&lt;/b&gt;&lt;br&gt;&lt;br&gt;旧报告保留为历史；当前 B 的排序需要重新复验。" style="rounded=0;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontFamily=Microsoft YaHei;fontColor=#17252b;fontSize=23;spacing=20;strokeWidth=2;fillColor=#fff0ef;strokeColor=#b7625b;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="500" width="680" height="180" />
+        </mxCell>
+        <mxCell id="judgment" value="&lt;b&gt;内容一致才可引用&lt;/b&gt;&lt;br&gt;&lt;br&gt;报告对应当前对象，仍需人的接受决定。" style="rounded=0;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontFamily=Microsoft YaHei;fontColor=#17252b;fontSize=23;spacing=20;strokeWidth=2;fillColor=#eef7f1;strokeColor=#56846a;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="780" y="500" width="680" height="180" />
+        </mxCell>
+        <mxCell id="transfer" value="&lt;b&gt;先定位变化对象&lt;/b&gt;　B 加成本列重签合同；A 执行源码变化则重验 A。" style="rounded=0;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontFamily=Microsoft YaHei;fontColor=#17252b;fontSize=23;spacing=20;strokeWidth=2;fillColor=#f5f5f5;strokeColor=#788186;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="740" width="1420" height="95" />
+        </mxCell>
+        <mxCell id="legend" value="蓝色：机制步骤　　红色：错误推断或反例　　绿色：判断条件　　灰色：迁移　｜　教学示意" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontColor=#17252b;spacing=0;fontSize=18;fontColor=#526168;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="850" width="1420" height="35" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

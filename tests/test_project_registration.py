@@ -19,11 +19,78 @@ class ProjectRegistrationTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        self.store = ProjectStore(self.root / 'registry.db')
+        self.runtime = self.root / 'runtime'
+        self.store = ProjectStore(self.runtime / 'registry.db')
         self.service = ProjectRegistration(self.store)
 
     def body(self, root, **extra):
         return {'name': '本地项目', 'root_path': str(root), 'source_type': 'local', **extra}
+
+    def test_data_directory_roots_are_rejected_before_git_and_registration(self):
+        plain = self.runtime / 'plain'
+        plain.mkdir()
+        original = plain / 'code.txt'
+        original.write_bytes(b'keep original fixture source')
+        existing = self.runtime / 'existing'
+        (existing / '.git').mkdir(parents=True)
+        for root in (self.runtime, plain, existing):
+            with self.subTest(root=root.name), patch.object(self.service, 'git') as git:
+                with self.assertRaisesRegex(ValueError, '工作台数据目录'):
+                    self.service.add(self.body(root, initialize_git=True, make_default=True))
+                with self.assertRaisesRegex(ValueError, '工作台数据目录'):
+                    self.store.create('direct registration', root, [], allow_pending_eval=True)
+                git.assert_not_called()
+        self.assertFalse((self.runtime / '.git').exists())
+        self.assertFalse((plain / '.git').exists())
+        self.assertTrue((existing / '.git').is_dir())
+        self.assertEqual(b'keep original fixture source', original.read_bytes())
+        self.assertEqual([], self.store.list())
+        self.assertIsNone(self.store.default())
+
+    def test_internal_clone_destination_is_rejected_without_mkdir_or_git(self):
+        destination = self.runtime / 'not-created' / 'clone'
+        with patch.object(self.service, 'git') as git:
+            with self.assertRaisesRegex(ValueError, '工作台数据目录'):
+                self.service.add(self.body(destination, source_type='git',
+                    git_url='https://example.org/project.git'))
+            git.assert_not_called()
+        self.assertFalse(destination.parent.exists())
+        self.assertEqual([], self.store.list())
+
+    def test_resolved_link_into_data_directory_is_rejected(self):
+        target = self.runtime / 'linked-source'
+        target.mkdir()
+        original = target / 'code.txt'
+        original.write_bytes(b'keep linked fixture source')
+        alias = self.root / 'external-link'
+        try:
+            alias.symlink_to(target, target_is_directory=True)
+        except OSError as error:
+            self.skipTest('directory symlink unavailable: ' + str(error))
+        self.addCleanup(alias.unlink)
+        with patch.object(self.service, 'git') as git:
+            with self.assertRaisesRegex(ValueError, '工作台数据目录'):
+                self.service.add(self.body(alias, initialize_git=True))
+            with self.assertRaisesRegex(ValueError, '工作台数据目录'):
+                self.store.create('direct alias', alias, [], allow_pending_eval=True)
+            git.assert_not_called()
+        self.assertFalse((target / '.git').exists())
+        self.assertEqual(b'keep linked fixture source', original.read_bytes())
+        self.assertEqual([], self.store.list())
+
+    def test_sibling_and_source_parent_of_data_directory_are_allowed(self):
+        sibling = self.root / 'runtime-copy'
+        sibling.mkdir()
+        original = sibling / 'code.txt'
+        original.write_bytes(b'keep external fixture source')
+        for root in (sibling, self.root):
+            with self.subTest(root=root.name):
+                project = self.service.add(self.body(root, initialize_git=True))
+                self.assertEqual(str(root.resolve()), project['root_path'])
+                self.assertEqual([], project['eval_command'])
+        self.assertEqual(b'keep external fixture source', original.read_bytes())
+        self.assertEqual(2, len(self.store.list()))
+        self.assertIsNone(self.store.default())
 
     def test_plain_directory_initializes_without_committing_or_changing_files(self):
         folder = self.root / 'local';folder.mkdir()
@@ -97,7 +164,10 @@ class ProjectRegistrationTests(unittest.TestCase):
             response = client.getresponse();return response.status, json.loads(response.read())
         folder = self.root / 'api-project';folder.mkdir()
         body = self.body(folder, initialize_git=True, make_default=True)
-        self.assertEqual(400, request('/api/v1/projects', body, 'https://other.example')[0])
+        status, rejected = request('/api/v1/projects', body, 'https://other.example')
+        self.assertEqual(403, status)
+        self.assertEqual('cross_origin', rejected['error'])
+        self.assertFalse(rejected['result_unknown'])
         self.assertFalse((folder / '.git').exists())
         status, project = request('/api/v1/projects', body)
         self.assertEqual(201, status)

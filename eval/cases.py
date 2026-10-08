@@ -50,6 +50,16 @@ def isolated_report_contract_is_honest() -> str:
     return "隔离报告逐项对账，退出码矛盾、空用例与身份替换均拒绝"
 
 
+def initiative_delivery_is_controlled() -> str:
+    from eval.workbench_contracts import initiative_delivery_is_controlled as contract
+    return contract()
+
+
+def learning_reuse_is_evidence_bound() -> str:
+    from eval.workbench_contracts import learning_reuse_is_evidence_bound as contract
+    return contract()
+
+
 def bootstrap_evidence_is_honest() -> str:
     from workbench import bootstrap
     assert hasattr(bootstrap, "BootstrapLedger"), "L01 工作台任务与证据账能力尚未实现"
@@ -225,7 +235,7 @@ def no_committed_secrets() -> str:
 
 def course_assets_present() -> str:
     root = Path(__file__).resolve().parent.parent
-    required = ["AGENTS.md", "FDE_SPEC.md", "CI_GATE_SPEC.md", "docs/courses/行动卡索引.md", "deploy/Dockerfile", "workbench_web/index.html"]
+    required = ["AGENTS.md", "FDE_SPEC.md", "docs/README.md", "deploy/Dockerfile", "workbench_web/index.html"]
     missing = [item for item in required if not (root / item).exists()]
     assert not missing, f"课程资产待补齐：{missing}"
     return "关键课程资产齐备"

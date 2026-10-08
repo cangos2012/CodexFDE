@@ -8,13 +8,23 @@ import shlex
 import sys
 import time
 
+from .file_io import read_bytes, read_text
+
 
 def digest(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    return hashlib.sha256(read_bytes(path)).hexdigest()
+
+
+def _write_checked_text(path, text):
+    path.write_text(text, encoding='utf-8', newline='\n')
+    raw = read_bytes(path)
+    if raw != text.encode('utf-8'):
+        raise ValueError('待审文件在准备期间发生变化，请重新准备')
+    return hashlib.sha256(raw).hexdigest()
 
 
 def write_json(path, value):
-    path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
+    return _write_checked_text(path, json.dumps(value, ensure_ascii=False, indent=2))
 
 
 def prepare(runtime, workspace, project, task_id, item_id, actor):
@@ -36,7 +46,7 @@ def prepare(runtime, workspace, project, task_id, item_id, actor):
     binding = dict(schema='workbench.quality-hook/v1', workspace=str(root), runtime=str(runtime),
         project_id=project['id'], task_id=task_id, initiative_id=item_id, actor=actor,
         command=command, timeout=100, prepared_at=time.time())
-    write_json(folder / 'binding.json', binding)
+    binding_sha256 = write_json(folder / 'binding.json', binding)
     # The customer repository does not need to install the Workbench package.
     # Use the explicitly reviewed controller interpreter and module, but execute
     # the customer's confirmed quality command in the candidate directory.
@@ -44,8 +54,8 @@ def prepare(runtime, workspace, project, task_id, item_id, actor):
     handler = ('import sys\n'
         f'sys.path.insert(0, {source!r})\n'
         'from workbench.quality_hook import main\n'
-        f'raise SystemExit(main({str(folder / "binding.json")!r}, {digest(folder / "binding.json")!r}))\n')
-    (folder / 'quality_gate.py').write_text(handler, encoding='utf-8')
+        f'raise SystemExit(main({str(folder / "binding.json")!r}, {binding_sha256!r}))\n')
+    handler_sha256 = _write_checked_text(folder / 'quality_gate.py', handler)
     installed = root / '.codex/hooks/quality_gate.py'
     python = str(Path(sys.executable).absolute())
     psquote = lambda value: "'" + value.replace("'", "''") + "'"
@@ -55,12 +65,12 @@ def prepare(runtime, workspace, project, task_id, item_id, actor):
     windows = 'powershell -NoProfile -EncodedCommand ' + base64.b64encode(script.encode('utf-16-le')).decode('ascii')
     entry = {'type': 'command', 'command': shlex.join([python, '-X', 'utf8', str(installed)]),
              'commandWindows': windows, 'timeout': 120, 'statusMessage': '运行本事项候选质量检查'}
-    write_json(folder / 'hooks.json', {'description': '工作台准备的候选 Stop 检查；安装后须在 /hooks 审查与信任',
+    config_sha256 = write_json(folder / 'hooks.json', {'description': '工作台准备的候选 Stop 检查；安装后须在 /hooks 审查与信任',
                                      'hooks': {'Stop': [{'hooks': [entry]}]}})
     return {'path': str(folder), 'workspace': str(root), 'task_id': task_id,
-            'binding_sha256': digest(folder / 'binding.json'),
-            'handler_sha256': digest(folder / 'quality_gate.py'),
-            'config_sha256': digest(folder / 'hooks.json'), 'actor': actor, 'prepared_at': binding['prepared_at']}
+            'binding_sha256': binding_sha256,
+            'handler_sha256': handler_sha256,
+            'config_sha256': config_sha256, 'actor': actor, 'prepared_at': binding['prepared_at']}
 
 
 def view(package, workspace, task_id):
@@ -69,11 +79,13 @@ def view(package, workspace, task_id):
     result = dict(package, status='prepared', trust='unknown', runs=[])
     try:
         folder = Path(package['path'])
+        checked_files = {}
         for filename, key in [('binding.json', 'binding_sha256'), ('quality_gate.py', 'handler_sha256'), ('hooks.json', 'config_sha256')]:
-            if digest(folder / filename) != package[key]:
+            raw = read_bytes(folder / filename)
+            if hashlib.sha256(raw).hexdigest() != package[key]:
                 raise ValueError('待审文件发生变化，请重新准备')
-        result['review_files'] = {name: (folder / name).read_text(encoding='utf-8')
-                                 for name in ('binding.json', 'hooks.json', 'quality_gate.py')}
+            checked_files[filename] = raw
+        result['review_files'] = {name: raw.decode('utf-8') for name, raw in checked_files.items()}
         if str(Path(workspace).resolve()) != package['workspace'] or task_id != package['task_id']:
             result['status'] = 'stale'
             return result
@@ -81,18 +93,18 @@ def view(package, workspace, task_id):
         config = root / '.codex/hooks.json'
         handler = root / '.codex/hooks/quality_gate.py'
         if config.is_file() and handler.is_file():
-            groups = json.loads(config.read_text(encoding='utf-8-sig')).get('hooks', {}).get('Stop', [])
-            expected = json.loads((folder / 'hooks.json').read_text(encoding='utf-8'))['hooks']['Stop'][0]['hooks'][0]
+            groups = json.loads(read_text(config, encoding='utf-8-sig')).get('hooks', {}).get('Stop', [])
+            expected = json.loads(checked_files['hooks.json'].decode('utf-8'))['hooks']['Stop'][0]['hooks'][0]
             present = any(expected == hook for group in groups for hook in group.get('hooks', []))
             result['status'] = 'installed' if present and digest(handler) == package['handler_sha256'] else 'different'
         elif config.exists() or handler.exists():
             result['status'] = 'different'
         for path in sorted(folder.glob('run-*.json'), reverse=True)[:10]:
-            run = json.loads(path.read_text(encoding='utf-8'))
+            run = json.loads(read_text(path, encoding='utf-8'))
             # Report freshness uses the same candidate/source check as manual Eval.
             if run.get('report'):
                 from .eval_harness import report_view
-                run['freshness'] = report_view(run['report'], workspace, json.loads((folder / 'binding.json').read_text(encoding='utf-8'))['runtime'])['freshness']
+                run['freshness'] = report_view(run['report'], workspace, json.loads(checked_files['binding.json'].decode('utf-8'))['runtime'])['freshness']
             result['runs'].append(run)
     except (OSError, ValueError, KeyError, TypeError) as error:
         result.update(status='unavailable', error=str(error))
@@ -133,9 +145,10 @@ def handle(binding, event, *, runner_factory=None):
 def main(binding_path, expected_hash):
     import contextlib
     try:
-        if digest(binding_path) != expected_hash:
+        raw = read_bytes(binding_path)
+        if hashlib.sha256(raw).hexdigest() != expected_hash:
             raise ValueError('Hook 绑定已变化，请重新准备并审查')
-        binding = json.loads(Path(binding_path).read_text(encoding='utf-8'))
+        binding = json.loads(raw.decode('utf-8'))
         try:
             event = json.load(sys.stdin)
         except ValueError:

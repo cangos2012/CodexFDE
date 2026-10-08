@@ -1,0 +1,99 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="drawio" version="26.0.0">
+  <diagram name="事件与质量检查因果">
+    <mxGraphModel page="1" pageScale="1" pageWidth="1100" pageHeight="1320" background="#FFFFFF">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="&lt;div style=&quot;font-size:32px;line-height:1.45;font-weight:bold;&quot;&gt;L07｜真实 Stop 事件怎样变成质量护栏&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#17324D;strokeColor=#17324D;strokeWidth=2;fontColor=#FFFFFF;fontFamily=Microsoft YaHei;align=left;verticalAlign=top;spacing=20;" vertex="1" parent="1">
+          <mxGeometry x="40" y="30" width="1020" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3" value="&lt;div style=&quot;font-size:27px;line-height:1.45;font-weight:bold;&quot;&gt;Codex 准备结束当前轮次&lt;/div&gt;&lt;div style=&quot;font-size:22px;line-height:1.45;&quot;&gt;事件：Stop&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;strokeWidth=2;fontColor=#20354A;fontFamily=Microsoft YaHei;align=left;verticalAlign=top;spacing=20;" vertex="1" parent="1">
+          <mxGeometry x="240" y="180" width="620" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="4" value="&lt;div style=&quot;font-size:26px;line-height:1.45;font-weight:bold;&quot;&gt;匹配已加载的项目 Stop 规则&lt;/div&gt;&lt;div style=&quot;font-size:22px;line-height:1.45;&quot;&gt;前提：该候选的项目 Hook 已审查并信任&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;strokeWidth=2;fontColor=#20354A;fontFamily=Microsoft YaHei;align=left;verticalAlign=top;spacing=20;" vertex="1" parent="1">
+          <mxGeometry x="170" y="330" width="760" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="5" value="&lt;div style=&quot;font-size:26px;line-height:1.45;font-weight:bold;&quot;&gt;启动 .codex/hooks/quality_gate.py&lt;/div&gt;&lt;div style=&quot;font-size:22px;line-height:1.45;&quot;&gt;位置：处理器归属的同一候选目录&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;strokeWidth=2;fontColor=#20354A;fontFamily=Microsoft YaHei;align=left;verticalAlign=top;spacing=20;" vertex="1" parent="1">
+          <mxGeometry x="170" y="500" width="760" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="6" value="&lt;div style=&quot;font-size:26px;line-height:1.45;font-weight:bold;&quot;&gt;用同候选解释器运行统一检查&lt;/div&gt;&lt;div style=&quot;font-size:22px;line-height:1.45;&quot;&gt;python -X utf8 -m eval.harness --suite blocking&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;strokeWidth=2;fontColor=#20354A;fontFamily=Microsoft YaHei;align=left;verticalAlign=top;spacing=20;" vertex="1" parent="1">
+          <mxGeometry x="170" y="670" width="760" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="7" value="&lt;div style=&quot;font-size:26px;line-height:1.45;font-weight:bold;&quot;&gt;失败：decision: block&lt;/div&gt;&lt;div style=&quot;font-size:22px;line-height:1.45;&quot;&gt;将原因返回 Codex&lt;/div&gt;&lt;div style=&quot;font-size:22px;line-height:1.45;&quot;&gt;Codex 收到续跑原因；按原授权继续&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;strokeWidth=2;fontColor=#20354A;fontFamily=Microsoft YaHei;align=left;verticalAlign=top;spacing=20;" vertex="1" parent="1">
+          <mxGeometry x="70" y="900" width="450" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="8" value="&lt;div style=&quot;font-size:26px;line-height:1.45;font-weight:bold;&quot;&gt;成功：continue: true&lt;/div&gt;&lt;div style=&quot;font-size:22px;line-height:1.45;&quot;&gt;允许本轮结束&lt;/div&gt;&lt;div style=&quot;font-size:22px;line-height:1.45;&quot;&gt;保留实际报告与候选来源&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;strokeWidth=2;fontColor=#20354A;fontFamily=Microsoft YaHei;align=left;verticalAlign=top;spacing=20;" vertex="1" parent="1">
+          <mxGeometry x="580" y="900" width="450" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="9" value="&lt;div style=&quot;font-size:26px;line-height:1.45;font-weight:bold;&quot;&gt;重入跳过不等于修复&lt;/div&gt;&lt;div style=&quot;font-size:22px;line-height:1.45;&quot;&gt;stop_hook_active=true 时，参考实现跳过检查。&lt;/div&gt;&lt;div style=&quot;font-size:22px;line-height:1.45;&quot;&gt;先显式复验，再取得新一轮正常 Stop 的通过记录。&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE6CC;strokeColor=#D79B00;strokeWidth=2;fontColor=#20354A;fontFamily=Microsoft YaHei;align=left;verticalAlign=top;spacing=20;" vertex="1" parent="1">
+          <mxGeometry x="70" y="1110" width="960" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="10" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#6A7A8C;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1.0;entryX=0.5;entryY=0.0;" edge="1" parent="1" source="3" target="4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="11" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#6A7A8C;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1.0;entryX=0.5;entryY=0.0;" edge="1" parent="1" source="4" target="5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="12" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#6A7A8C;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1.0;entryX=0.5;entryY=0.0;" edge="1" parent="1" source="5" target="6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="13" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#B85450;strokeWidth=2;endArrow=block;endFill=1;exitX=0.27631578947368424;exitY=1.0;entryX=0.5;entryY=0.0;" edge="1" parent="1" source="6" target="7">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="380" y="830" />
+              <mxPoint x="295" y="830" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="43" value="退出码非 0" style="text;html=1;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontSize=22;fontColor=#B85450;" vertex="1" parent="1">
+          <mxGeometry x="110" y="850" width="160" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="14" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#82B366;strokeWidth=2;endArrow=block;endFill=1;exitX=0.7236842105263158;exitY=1.0;entryX=0.5;entryY=0.0;" edge="1" parent="1" source="6" target="8">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="720" y="830" />
+              <mxPoint x="805" y="830" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="44" value="退出码为 0" style="text;html=1;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontSize=22;fontColor=#82B366;" vertex="1" parent="1">
+          <mxGeometry x="850" y="850" width="160" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="15" value="教学示意 · 配置决定怎么启动，检查结果决定怎样结束" style="text;html=1;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontSize=22;fontColor=#49647E;" vertex="1" parent="1">
+          <mxGeometry x="100" y="130" width="960" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="16" value="失败返回后，修复与显式复验发生在同一候选中。" style="text;html=1;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontSize=22;fontColor=#49647E;" vertex="1" parent="1">
+          <mxGeometry x="80" y="1050" width="980" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="50" value="" style="group;pointerEvents=0;" vertex="1" parent="1">
+          <mxGeometry x="100" y="1270" width="900" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="51" value="" style="rounded=1;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;" vertex="1" parent="50">
+          <mxGeometry x="0" y="5" width="25" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="52" value="运行链路" style="text;html=1;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontSize=20;fontColor=#49647E;" vertex="1" parent="50">
+          <mxGeometry x="35" y="0" width="160" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="53" value="" style="rounded=1;html=1;fillColor=#FFE6CC;strokeColor=#D79B00;" vertex="1" parent="50">
+          <mxGeometry x="230" y="5" width="25" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="54" value="重入注意" style="text;html=1;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontSize=20;fontColor=#49647E;" vertex="1" parent="50">
+          <mxGeometry x="265" y="0" width="160" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="55" value="" style="rounded=1;html=1;fillColor=#F8CECC;strokeColor=#B85450;" vertex="1" parent="50">
+          <mxGeometry x="460" y="5" width="25" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="56" value="阻断续跑" style="text;html=1;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontSize=20;fontColor=#49647E;" vertex="1" parent="50">
+          <mxGeometry x="495" y="0" width="160" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="57" value="" style="rounded=1;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="50">
+          <mxGeometry x="690" y="5" width="25" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="58" value="检查通过" style="text;html=1;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontSize=20;fontColor=#49647E;" vertex="1" parent="50">
+          <mxGeometry x="725" y="0" width="160" height="30" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

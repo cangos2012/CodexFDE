@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
-import subprocess
 from pathlib import Path
 
 from .execution import CodexExecutionRunner, CodexLineCallback
@@ -27,7 +25,27 @@ class ProjectExecutionRunner:
 
     def __call__(self, task: dict, *, on_codex_line: CodexLineCallback | None = None) -> dict:
         project = self.projects.get(task_project_id(task))
-        return CodexExecutionRunner(project["root_path"], self.runtime_dir)(task, on_codex_line=on_codex_line)
+        workspace = Path(project['root_path'])
+        if task.get('execution_mode') == 'codex':
+            receipt_path = self.runtime_dir / 'candidates' / task['id'] / 'project.json'
+            if receipt_path.is_file():
+                from .reference_paths import resolve_reference
+                receipt = json.loads(receipt_path.read_text(encoding='utf-8'))
+                if receipt['project_id'] != project['id']:
+                    raise ValueError('候选项目绑定不一致')
+                workspace = resolve_reference(receipt['workspace'], self.runtime_dir)
+                if workspace.is_symlink() or workspace.resolve() != (receipt_path.parent / 'workspace').resolve():
+                    raise ValueError('候选工作区路径不匹配，禁止修改登记项目源码')
+            else:
+                from .daily_delivery import manifest
+                from .delivery_runtime import DeliveryRuntime
+                baseline = manifest(workspace, self.runtime_dir)
+                candidate = receipt_path.parent / 'workspace'
+                DeliveryRuntime._snapshot(workspace, candidate, baseline)
+                receipt_path.write_text(json.dumps({'project_id': project['id'], 'source_root': str(workspace),
+                    'workspace': str(candidate), 'source_manifest': baseline}, ensure_ascii=False), encoding='utf-8')
+                workspace = candidate
+        return CodexExecutionRunner(workspace, self.runtime_dir)(task, on_codex_line=on_codex_line)
 
     def capabilities(self) -> dict:
         command = resolve_codex_command()
@@ -51,29 +69,27 @@ class ProjectEvalRunner:
         project = self.projects.get(task_project_id(task))
 
         def run(_suite: str = "blocking", write_report: bool = True) -> dict:
-            report_path = self.runtime_dir / "project-reports" / f"{task['id']}.json"
-            report_path.parent.mkdir(parents=True, exist_ok=True)
-            command = [part.replace("{report_path}", str(report_path)) for part in project["eval_command"]]
-            completed = subprocess.run(
-                command, cwd=project["root_path"], text=True,
-                capture_output=True, check=False, timeout=1800,
-            )
-            if report_path.is_file():
-                report = json.loads(report_path.read_text(encoding="utf-8"))
-            else:
-                output = (completed.stdout or "").strip()
-                try:
-                    report = json.loads(output)
-                except json.JSONDecodeError as exc:
-                    raise RuntimeError("项目 Eval 命令必须写入 {report_path} 或在 stdout 输出完整 JSON") from exc
-            summary = report.get("summary", {})
-            if summary.get("decision") not in {"pass", "block"}:
-                raise RuntimeError("项目 Eval 报告缺少 pass/block 决策")
-            if (completed.returncode == 0) != (summary['decision'] == 'pass'):
-                raise RuntimeError('项目 Eval 退出码与报告结论不一致')
+            from .project_delivery import CandidateProjectEval
+            from .reference_paths import resolve_reference
+            candidate_receipt = self.runtime_dir / 'candidates' / task['id'] / 'project.json'
+            if candidate_receipt.is_file():
+                receipt = json.loads(candidate_receipt.read_text(encoding='utf-8'))
+                if receipt['project_id'] != project['id']:
+                    raise ValueError('候选项目绑定不一致')
+                workspace = resolve_reference(receipt['workspace'], self.runtime_dir)
+                if workspace.is_symlink() or workspace.resolve() != (candidate_receipt.parent / 'workspace').resolve():
+                    raise ValueError('候选工作区路径不匹配，禁止以其他源码替代项目 Eval')
+                report = CandidateProjectEval(workspace, self.runtime_dir, task['id'], project['eval_command'], 'project')()
+                report['project_runner'] = {'project_id': project['id'], 'root_path': project['root_path'],
+                                            'workspace': str(workspace), 'returncode': report['runner']['process_returncode']}
+                return report
+            if task.get('execution_mode') == 'codex':
+                raise RuntimeError('编码任务缺少隔离候选，不能用原项目 Eval 替代')
+            workspace = Path(project['root_path'])
+            report = CandidateProjectEval(workspace, self.runtime_dir, task['id'], project['eval_command'], 'project-verify')()
             report["project_runner"] = {
                 "project_id": project["id"], "root_path": project["root_path"],
-                "returncode": completed.returncode,
+                "returncode": report['runner']['process_returncode'],
             }
             return report
 

@@ -1,15 +1,371 @@
 """Real local pipe behavior; does not contact or impersonate Codex."""
+import json
+import os
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from workbench.execution import CodexExecutionRunner
+from workbench.execution import CodexExecutionRunner, spawn_owned_process
 
 
 class ExecutionStreamTests(unittest.TestCase):
+    def assert_start_failure_closes_process(self, failing_target):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = CodexExecutionRunner(root, root)
+            captured, started_threads = [], []
+            actual_start = threading.Thread.start
+            counts = {}
+
+            def capture(*args, **kwargs):
+                result = spawn_owned_process(*args, **kwargs)
+                captured.append(result)
+                return result
+
+            def start(thread):
+                target = thread._target.__name__
+                counts[target] = counts.get(target, 0) + 1
+                if (target, counts[target]) == failing_target:
+                    raise RuntimeError('fixture stream thread start failure')
+                actual_start(thread)
+                started_threads.append(thread)
+
+            try:
+                with patch('workbench.execution.spawn_owned_process', side_effect=capture), \
+                     patch.object(threading.Thread, 'start', start), \
+                     self.assertRaisesRegex(RuntimeError, 'thread start failure'):
+                    runner._run_codex_streaming(
+                        [sys.executable, '-c', "import time;time.sleep(30)"],
+                        '', 10, lambda line: None, time.monotonic())
+                self.assertEqual(1, len(captured))
+                process, owner, _ = captured[0]
+                self.assertIsNotNone(process.poll(), 'guard survived failed reader/writer startup')
+                self.assertTrue(all(getattr(process, name).closed for name in ('stdin', 'stdout', 'stderr')))
+                self.assertTrue(all(not thread.is_alive() for thread in started_threads))
+                if owner:
+                    self.assertIsNone(owner.handle)
+            finally:
+                # Reclaim only this fixture's processes even when the old code fails.
+                for process, owner, _ in captured:
+                    if owner: owner.close()
+                    if process.poll() is None: process.kill()
+                    process.wait(timeout=5)
+                for thread in started_threads: thread.join(5)
+                for process, _, _ in captured:
+                    for name in ('stdin', 'stdout', 'stderr'):
+                        getattr(process, name).close()
+
+    def test_second_reader_start_failure_closes_owned_process_and_pipes(self):
+        self.assert_start_failure_closes_process(('drain', 2))
+
+    def test_writer_start_failure_closes_owned_process_and_pipes(self):
+        self.assert_start_failure_closes_process(('feed', 1))
+
+    def test_binary_stdout_preserves_nul_crlf_and_non_utf8_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = CodexExecutionRunner(root, root)
+            payload = b'\x00\xff\r\nname\rfile\x00' + '中文'.encode('utf-8')
+            callback = Mock()
+            result = runner._run_codex_streaming(
+                [sys.executable, '-c', f'import sys;sys.stdout.buffer.write({payload!r})'],
+                '', 10, callback, time.monotonic(), binary_stdout=True)
+            self.assertEqual(0, result.returncode)
+            self.assertEqual(payload, result.stdout)
+            callback.assert_not_called()
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows Job owns pipe-holding descendants')
+    def test_parent_exit_closes_job_before_waiting_for_descendant_pipe_eof(self):
+        import ctypes
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel.WaitForSingleObject.restype = wintypes.DWORD
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle.restype = wintypes.BOOL
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gate = root / 'parent-may-exit'
+            runner = CodexExecutionRunner(root, root)
+            captured, streams, handles = [], [], []
+            actual_start = threading.Thread.start
+            real_clock = time.monotonic
+            invoked_at = real_clock()
+            observed_at = None
+            validation_seconds = 5
+            script = (
+                'import subprocess,sys,time\nfrom pathlib import Path\n'
+                'child=subprocess.Popen([sys.executable,"-c","import time;time.sleep(60)"])\n'
+                'print(child.pid,flush=True)\n'
+                f'while not Path({str(gate)!r}).exists(): time.sleep(.01)\n'
+            )
+
+            def capture(*args, **kwargs):
+                value = spawn_owned_process(*args, **kwargs)
+                captured.append(value)
+                return value
+
+            def start(thread):
+                actual_start(thread)
+                if getattr(thread._target, '__name__', '') in {'drain', 'feed'}:
+                    streams.append(thread)
+
+            def execution_clock():
+                now = real_clock()
+                if observed_at is None:
+                    # Allow at most 30 real seconds to observe a live descendant.
+                    # Once startup expires, keep time advancing during cleanup.
+                    elapsed = now - invoked_at
+                    return invoked_at if elapsed < 30 else invoked_at + validation_seconds + elapsed - 30
+                return invoked_at + now - observed_at
+
+            def on_line(line):
+                nonlocal observed_at
+                handle = kernel.OpenProcess(0x00100000 | 0x1000, False, int(line))
+                self.assertTrue(handle, 'could not retain the real pipe-holding descendant')
+                handles.append(handle)
+                self.assertEqual(258, kernel.WaitForSingleObject(handle, 0))
+                self.assertIsNone(captured[0][0].poll(), 'parent exited before startup observation')
+                observed_at = real_clock()
+                self.assertLessEqual(observed_at - invoked_at, 30, 'descendant startup exceeded 30 seconds')
+                gate.write_text('descendant was observed alive', encoding='utf-8')
+
+            try:
+                with patch('workbench.execution.spawn_owned_process', side_effect=capture), \
+                     patch.object(threading.Thread, 'start', start), \
+                     patch('workbench.execution.time.monotonic', side_effect=execution_clock):
+                    result = runner._run_codex_streaming(
+                        [sys.executable, '-u', '-c', script], '', validation_seconds, on_line, invoked_at)
+                self.assertIsNotNone(observed_at,
+                                     f'no live descendant observed within 30 seconds; returncode={result.returncode}, stderr={result.stderr!r}')
+                self.assertEqual(0, result.returncode,
+                                 f'parent exit/pipe EOF exceeded 5 seconds after startup observation: {result.stderr}')
+                self.assertEqual(1, len(handles))
+                self.assertEqual(0, kernel.WaitForSingleObject(handles[0], 1000),
+                                 'descendant retained its pipes after the owned parent exited')
+                self.assertEqual(3, len(streams))
+                self.assertTrue(all(not thread.is_alive() for thread in streams))
+                process, owner, _ = captured[0]
+                self.assertIsNotNone(process.poll())
+                self.assertIsNone(owner.handle)
+                self.assertTrue(all(getattr(process, name).closed for name in ('stdin', 'stdout', 'stderr')))
+            finally:
+                for process, owner, _ in captured:
+                    if owner: owner.close()
+                    if process.poll() is None: process.kill()
+                    process.wait(timeout=5)
+                for thread in streams: thread.join(5)
+                for process, _, _ in captured:
+                    for name in ('stdin', 'stdout', 'stderr'): getattr(process, name).close()
+                for handle in handles: kernel.CloseHandle(handle)
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows Job close fault injection')
+    def test_parent_exit_owner_close_error_retries_cleanup_and_rejects_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = CodexExecutionRunner(root, root)
+            captured = []
+            real_clock = time.monotonic
+            invoked_at = real_clock()
+            observed_at = None
+            validation_seconds = 5
+            gate = root / 'ready-parent-may-exit'
+            script = (
+                'import time\nfrom pathlib import Path\n'
+                'print("fixture parent ready",flush=True)\n'
+                f'while not Path({str(gate)!r}).exists(): time.sleep(.01)\n'
+            )
+
+            class FailingClose:
+                def __init__(self, process, owner):
+                    self.process, self.owner, self.calls = process, owner, 0
+
+                def close(self):
+                    self.calls += 1
+                    if self.calls == 1:
+                        # The fault occurs after the owned parent has exited.
+                        if self.process.poll() is None:
+                            raise AssertionError('fixture close happened before parent exit')
+                        raise OSError('fixture early owner close failure')
+                    self.owner.close()
+
+            def capture(*args, **kwargs):
+                process, owner, prefix = spawn_owned_process(*args, **kwargs)
+                wrapped = FailingClose(process, owner)
+                captured.append((process, wrapped))
+                return process, wrapped, prefix
+
+            def execution_clock():
+                now = real_clock()
+                if observed_at is None:
+                    elapsed = now - invoked_at
+                    return invoked_at if elapsed < 30 else invoked_at + validation_seconds + elapsed - 30
+                return invoked_at + now - observed_at
+
+            def on_line(line):
+                nonlocal observed_at
+                self.assertEqual('fixture parent ready', line)
+                self.assertIsNone(captured[0][0].poll(), 'parent exited before ready observation')
+                observed_at = real_clock()
+                self.assertLessEqual(observed_at - invoked_at, 30, 'parent startup exceeded 30 seconds')
+                gate.write_text('ready parent was observed', encoding='utf-8')
+
+            try:
+                caught = None
+                with patch('workbench.execution.spawn_owned_process', side_effect=capture), \
+                     patch('workbench.execution.time.monotonic', side_effect=execution_clock):
+                    try:
+                        runner._run_codex_streaming([sys.executable, '-u', '-c', script],
+                                                   '', validation_seconds, on_line, invoked_at)
+                    except RuntimeError as error:
+                        caught = error
+                self.assertIsNotNone(observed_at, 'no ready parent observed within 30 seconds')
+                self.assertIsNotNone(caught, 'recovered early owner close error was accepted as success')
+                self.assertRegex(str(caught), 'fixture early owner close failure')
+                process, owner = captured[0]
+                self.assertIsInstance(caught.__cause__, OSError)
+                self.assertEqual(2, owner.calls)
+                self.assertIsNone(owner.owner.handle)
+                self.assertEqual(0, process.poll())
+                self.assertTrue(all(getattr(process, name).closed for name in ('stdin', 'stdout', 'stderr')))
+            finally:
+                for process, owner in captured:
+                    owner.owner.close()
+                    if process.poll() is None: process.kill()
+                    process.wait(timeout=5)
+                    for name in ('stdin', 'stdout', 'stderr'): getattr(process, name).close()
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows Job close fault injection')
+    def test_owner_close_failure_retries_cleanup_and_rejects_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = CodexExecutionRunner(root, root)
+            captured = []
+
+            class FailingClose:
+                def __init__(self, owner): self.owner, self.calls = owner, 0
+                def close(self):
+                    self.calls += 1
+                    if self.calls == 1: raise OSError('fixture owner close failure')
+                    self.owner.close()
+
+            def capture(*args, **kwargs):
+                process, owner, prefix = spawn_owned_process(*args, **kwargs)
+                wrapped = FailingClose(owner)
+                captured.append((process, wrapped))
+                return process, wrapped, prefix
+
+            try:
+                with patch('workbench.execution.spawn_owned_process', side_effect=capture), \
+                     self.assertRaisesRegex(RuntimeError, 'owner close failure'):
+                    runner._run_codex_streaming([sys.executable, '-c', "print('done')"],
+                                               '', 10, lambda line: None, time.monotonic())
+                process, owner = captured[0]
+                self.assertGreaterEqual(owner.calls, 2)
+                self.assertIsNone(owner.owner.handle)
+                self.assertIsNotNone(process.poll())
+                self.assertTrue(all(getattr(process, name).closed for name in ('stdin', 'stdout', 'stderr')))
+            finally:
+                for process, owner in captured:
+                    owner.close()
+                    if process.poll() is None: process.kill()
+                    process.wait(timeout=5)
+                    for name in ('stdin', 'stdout', 'stderr'): getattr(process, name).close()
+
+    def test_callback_failure_preserves_attempt_receipt_and_ends_real_fixture_process(self):
+        # Engineering fixture: Python runs a local file named exec. No Codex CLI
+        # or model is invoked; the real command, streams and owner are unchanged.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace, runtime = root / 'candidate', root / 'runtime'
+            workspace.mkdir()
+            (workspace / 'exec').write_text(
+                "import time\nprint('engineering fixture ready',flush=True)\ntime.sleep(30)\n",
+                encoding='utf-8')
+            (workspace / 'value.txt').write_text('1', encoding='utf-8')
+            runner = CodexExecutionRunner(workspace, runtime, executable=sys.executable)
+            task = {'id': 'TASK-callback-fixture', 'request': 'Engineering callback failure fixture',
+                    'execution_mode': 'codex', 'write_scope': ['value.txt'],
+                    'execution_timeout_seconds': 30, '_runtime_timeout_seconds': 10}
+            failure = RuntimeError('engineering fixture callback failure')
+            captured, commands, streams = [], [], []
+            actual_start = threading.Thread.start
+
+            def capture(command, *args, **kwargs):
+                value = spawn_owned_process(command, *args, **kwargs)
+                commands.append(list(command))
+                captured.append(value)
+                return value
+
+            def start(thread):
+                target = getattr(thread._target, '__name__', '')
+                actual_start(thread)
+                if target in {'drain', 'feed'}:
+                    streams.append(thread)
+
+            def on_line(line):
+                if line == 'engineering fixture ready':
+                    raise failure
+
+            try:
+                with patch('workbench.execution.spawn_owned_process', side_effect=capture), \
+                     patch.object(threading.Thread, 'start', start), \
+                     self.assertRaises(RuntimeError) as raised:
+                    runner(task, on_codex_line=on_line)
+                self.assertIs(failure, raised.exception)
+                paths = list((runtime / 'delivery' / task['id']).glob('*/process.json'))
+                self.assertEqual(1, len(paths))
+                receipt = json.loads(paths[0].read_text(encoding='utf-8'))
+                self.assertEqual(paths[0].parent.name, receipt['attempt_id'])
+                self.assertEqual('failed', receipt['status'])
+                self.assertFalse(receipt['success'])
+                self.assertIsNone(receipt['returncode'])
+                self.assertFalse(receipt['process_result_available'])
+                self.assertEqual('RuntimeError', receipt['exception_type'])
+                self.assertEqual(str(failure), receipt['error'])
+                self.assertEqual(commands[0], receipt['command'])
+                self.assertEqual([runner.executable, 'exec'], receipt['command'][:2])
+                self.assertEqual(str(workspace.resolve()), receipt['workspace'])
+                self.assertFalse((paths[0].parent / 'evidence.json').exists())
+                self.assertEqual('1', (workspace / 'value.txt').read_text(encoding='utf-8'))
+                self.assertEqual(1, len(captured))
+                process, owner, _ = captured[0]
+                self.assertIsNotNone(process.poll())
+                self.assertTrue(all(getattr(process, name).closed for name in ('stdin', 'stdout', 'stderr')))
+                self.assertEqual(3, len(streams))
+                self.assertTrue(all(not thread.is_alive() for thread in streams))
+                if owner:
+                    self.assertIsNone(owner.handle)
+            finally:
+                for process, owner, _ in captured:
+                    if owner: owner.close()
+                    if process.poll() is None: process.kill()
+                    process.wait(timeout=5)
+                for thread in streams: thread.join(5)
+                for process, _, _ in captured:
+                    for name in ('stdin', 'stdout', 'stderr'): getattr(process, name).close()
+
+    def test_cancelled_invocation_never_spawns_a_process(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = CodexExecutionRunner(root, root)
+            runner.control_event = threading.Event()
+            runner.control_event.set()
+            with patch('workbench.execution.spawn_owned_process') as spawn:
+                result = runner._run_codex_streaming(
+                    [sys.executable, '-c', "raise RuntimeError('must never execute')"],
+                    '', 10, lambda line: None, time.monotonic())
+                spawn.assert_not_called()
+            self.assertEqual(130, result.returncode)
+            self.assertIn('未启动进程', result.stderr)
+
     def test_chinese_prompt_survives_the_process_gate(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
